@@ -4,6 +4,10 @@ class ODESolver {
 public:
   virtual ~ODESolver() = default;
 
+  virtual double getTime() const { return x; }
+  virtual const std::vector<double> &getState() const { return y; }
+  virtual void step(double h) = 0;
+
 protected:
   double x;
   std::vector<double> y;
@@ -11,12 +15,10 @@ protected:
 
   virtual void derivs(double x, const std::vector<double> &y,
                       std::vector<double> &dydx) = 0;
-  virtual void step(double h) = 0;
-  virtual double getTime() const { return x; }
-  virtual const std::vector<double> &getState() const { return y; }
 };
 
 class RK4Solver : public ODESolver {
+public:
   void step(double h) override {
     const int n = y.size();
     const double hh = 0.5 * h;
