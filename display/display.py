@@ -3,20 +3,44 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
 
-filename = sys.argv[1] if len(sys.argv) > 1 else 'vanderpol.csv'
-data = pd.read_csv(filename)
+# Настройка файла
+filename = sys.argv[1] if len(sys.argv) > 1 else 'results.csv'
+try:
+    data = pd.read_csv(filename)
+except FileNotFoundError:
+    print(f"Error: File {filename} not found.")
+    sys.exit(1)
 
-sns.set_theme()
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+x_cols = [c for c in data.columns if c.startswith('x')]
+n = len(x_cols)
 
-ax1.plot(data['t'], data['x'])
-ax1.set_xlabel('Time')
-ax1.set_ylabel('Position')
+sns.set_theme(style="whitegrid")
+palette = sns.color_palette("husl", n)
 
-ax2.plot(data['x'], data['v'])
-ax2.set_xlabel('Position')
-ax2.set_ylabel('Velocity')
+plt.figure(num="Time Domain", figsize=(16, 8), dpi=100)
+for i in range(n):
+    plt.plot(data['t'], data[f'x{i}'],
+             label=f'G{i}',
+             color=palette[i],
+             linewidth=1.2,
+             alpha=0.8)
 
+plt.title('Oscillations over time', fontsize=16)
+plt.xlabel('Time (s)', fontsize=14)
+plt.ylabel('Amplitude (X)', fontsize=14)
+plt.legend(loc='upper right')
 plt.tight_layout()
-plt.savefig('result.png')
+
+plt.figure(num="Phase Portrait", figsize=(10, 10), dpi=100)
+for i in range(n):
+    plt.plot(data[f'x{i}'], data[f'y{i}'],
+             color=palette[i],
+             linewidth=0.8,
+             alpha=0.4)
+
+plt.title('Phase Space trajectories', fontsize=16)
+plt.xlabel('Position (X)', fontsize=14)
+plt.ylabel('Velocity (Y)', fontsize=14)
+plt.tight_layout()
+
 plt.show()
