@@ -9,9 +9,17 @@ RESULTS = results.csv
 
 all: execute plot
 
+release:
+	@echo "--- Building C++ simulation (Release) ---"
+	rm -rf $(BUILD_DIR)
+	mkdir -p $(BUILD_DIR)
+	cd $(BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=Release .. && cmake --build . -j$(nproc)
+
 build:
 	@echo "--- Building C++ simulation ---"
-	cd $(SIM_DIR) && cmake --build ./build
+	mkdir -p $(BUILD_DIR)
+	cd $(BUILD_DIR) && cmake ..
+	cmake --build $(BUILD_DIR)
 
 execute: build
 	@echo "--- Running simulation ---"
@@ -24,4 +32,5 @@ plot:
 clean:
 	rm -f $(RESULTS)
 	rm -f *.png
+	rm -rf $(BUILD_DIR)
 	@echo "Cleaned up results and plots."
