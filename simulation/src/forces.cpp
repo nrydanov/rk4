@@ -1,4 +1,7 @@
 #include "forces.h"
+#include <cmath>
+
+namespace forces {
 
 SinForce::SinForce(const std::vector<int> &pins,
                    const std::vector<double> &alpha,
@@ -17,3 +20,5 @@ const SinForce::ForceResult &SinForce::operator()(double t) {
   }
   return force;
 }
+
+} // namespace forces
