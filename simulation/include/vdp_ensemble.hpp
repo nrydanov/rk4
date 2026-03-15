@@ -74,9 +74,7 @@ void VdPEnsembleSolver<ForceFunc>::derivs(double t,
 
     double coupling_sum = 0.0;
     for (int j = 0; j < N; ++j) {
-      if (adj[i][j] == 1) {
-        coupling_sum += (state[2 * j] - xi);
-      }
+      coupling_sum += adj[i][j] * (state[2 * j] - xi);
     }
 
     dydx[idx_x] = yi;
