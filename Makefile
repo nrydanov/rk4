@@ -3,6 +3,7 @@ SIM_DIR = simulation
 BUILD_DIR = $(SIM_DIR)/build
 DISPLAY_DIR = display
 RESULTS = results.csv
+CONFIG = config.yaml
 
 .PHONY: demo run build plot clean
 
