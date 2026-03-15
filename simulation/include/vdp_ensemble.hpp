@@ -1,5 +1,18 @@
 #pragma once
 #include "solver.h"
+#include <tl/expected.hpp>
+
+namespace vdp_ensemble {
+
+enum class ConstructError { WrongArgSize };
+
+constexpr const char *to_string(ConstructError e) {
+  switch (e) {
+  case ConstructError::WrongArgSize:
+    return "Wrong argument size";
+    return "Unknown error";
+  }
+}
 
 template <class ForceFunc> class VdPEnsembleSolver : public RK4Solver {
 private:
@@ -14,12 +27,24 @@ protected:
   void derivs(double t, const std::vector<double> &state,
               std::vector<double> &dydx) override;
 
-public:
   VdPEnsembleSolver(double t0, const std::vector<double> &y0,
                     const std::vector<double> &freqs,
                     const std::vector<double> &lambda,
                     const std::vector<double> &coupling,
                     const std::vector<std::vector<int>> &adj, ForceFunc &func);
+
+public:
+  static tl::expected<VdPEnsembleSolver, ConstructError>
+  create(size_t N, double t0, const std::vector<double> &y0,
+         const std::vector<double> &freqs, const std::vector<double> &lambda,
+         const std::vector<double> &coupling,
+         const std::vector<std::vector<int>> &adj, ForceFunc &func) {
+    if (N != lambda.size() || N != coupling.size() || N != adj.size() ||
+        N != adj[0].size() || 2 * N != y0.size()) {
+      return tl::make_unexpected(ConstructError::WrongArgSize);
+    }
+    return VdPEnsembleSolver(t0, y0, freqs, lambda, coupling, adj, func);
+  }
 };
 
 template <class ForceFunc>
@@ -65,3 +90,5 @@ void VdPEnsembleSolver<ForceFunc>::derivs(double t,
     }
   }
 }
+
+} // namespace vdp_ensemble
