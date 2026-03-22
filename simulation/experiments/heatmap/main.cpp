@@ -98,9 +98,9 @@ int main(int argc, char **argv) {
           solver.step(dt);
           auto state = solver.getState();
           double sum_x = state[0] + state[2] + state[4];
-          acc += sum_x * sum_x * dt;
+          acc += sum_x * sum_x;
         }
-        L = static_cast<float>(2.0 / (T - t_trans) * acc);
+        L = static_cast<float>(2.0 / (T - t_trans) * acc * dt);
 
         results[write_idx.fetch_add(1)] = {delta1, delta2, e, L};
       }
