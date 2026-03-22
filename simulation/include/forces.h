@@ -29,4 +29,13 @@ private:
            const std::vector<double> &fomg);
 };
 
+class NoopForce {
+public:
+  using ForceResult = std::vector<std::pair<int, double>>;
+  const ForceResult &operator()(double) { return result; }
+
+private:
+  ForceResult result;
+};
+
 } // namespace forces

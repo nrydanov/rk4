@@ -53,12 +53,7 @@ int main(int argc, char **argv) {
   const int grid_size = static_cast<int>(std::abs(d_max - d_min) / dt + 1);
   const size_t n_tasks = grid_size * grid_size * epsilons.size();
 
-  auto opt_force = forces::SinForce::create(pins, alpha, fomg);
-  if (!opt_force.has_value()) {
-    std::cerr << "Got an error on constructing sin force";
-    return 1;
-  }
-  auto sforce = opt_force.value();
+  forces::NoopForce noop_force;
 
   std::ofstream out(output_path);
   if (!out.is_open()) {
@@ -83,8 +78,8 @@ int main(int argc, char **argv) {
 
         auto freqs = std::vector<double>{1.0, 1.0 + delta1, 1.0 + delta2};
         auto opt_solver =
-            vdp_ensemble::VdPEnsembleSolver<forces::SinForce>::create(
-                N, 0.0, y0, freqs, lambdas, coupling, adj, sforce);
+            vdp_ensemble::VdPEnsembleSolver<forces::NoopForce>::create(
+                N, 0.0, y0, freqs, lambdas, coupling, adj, noop_force);
         if (!opt_solver.has_value()) {
           results[write_idx.fetch_add(1)] =
               tl::unexpected(CalcFailure::WrongArguments);
