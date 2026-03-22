@@ -46,11 +46,12 @@ int main(int argc, char **argv) {
   const auto s_node = config["sim"];
   const double T = s_node["T"].as<double>();
   const double dt = s_node["dt"].as<double>();
+  const double d_step = s_node["d_step"].as<double>();
   const double d_min = s_node["d_min"].as<double>();
   const double d_max = s_node["d_max"].as<double>();
   const double t_trans = s_node["t_transition"].as<double>();
   const auto epsilons = s_node["epsilons"].as<std::vector<double>>();
-  const int grid_size = static_cast<int>(std::abs(d_max - d_min) / dt + 1);
+  const int grid_size = static_cast<int>(std::abs(d_max - d_min) / d_step + 1);
   const size_t n_tasks = grid_size * grid_size * epsilons.size();
 
   forces::NoopForce noop_force;
@@ -71,10 +72,10 @@ int main(int argc, char **argv) {
     auto coupling = std::vector<double>{eps, eps, eps};
 
     for (int i1 = 0; i1 < grid_size; ++i1) {
-      double delta1 = d_min + i1 * dt;
+      double delta1 = d_min + i1 * d_step;
 
       for (int i2 = 0; i2 < grid_size; ++i2) {
-        double delta2 = d_min + i2 * dt;
+        double delta2 = d_min + i2 * d_step;
 
         auto freqs = std::vector<double>{1.0, 1.0 + delta1, 1.0 + delta2};
         auto opt_solver =
