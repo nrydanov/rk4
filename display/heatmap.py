@@ -14,7 +14,7 @@ def plot_heatmaps(csv_file: str):
     eps_values = sorted(df['eps'].dropna().unique())
     n = len(eps_values)
 
-    cmap = sns.color_palette("RdBu_r", as_cmap=True)
+    cmap = sns.color_palette("YlOrRd", as_cmap=True)
     cmap.set_bad(color='lightgray')
     vmin, vmax = df['L'].min(), df['L'].max()
 
@@ -27,7 +27,7 @@ def plot_heatmaps(csv_file: str):
                  .pivot_table(index='delta1', columns='delta2', values='L')
                  .sort_index(ascending=False))
         sns.heatmap(pivot, ax=axes[i], cmap=cmap, vmin=vmin, vmax=vmax,
-                    center=0, mask=pivot.isna(), square=True, cbar=False)
+                    mask=pivot.isna(), square=True, cbar=False)
         axes[i].set_title(f'ε = {eps:.3f}')
         axes[i].set_xlabel('$\\delta_2$')
         axes[i].set_ylabel('$\\delta_1$', rotation=0, labelpad=20)
