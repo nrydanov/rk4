@@ -1,10 +1,15 @@
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
 
-# Настройка файла
-filename = sys.argv[1] if len(sys.argv) > 1 else 'results.csv'
+parser = argparse.ArgumentParser()
+parser.add_argument("file", nargs="?", default="results.csv")
+parser.add_argument("--show", action="store_true", help="Open interactive window")
+args = parser.parse_args()
+
+filename = args.file
 try:
     data = pd.read_csv(filename)
 except FileNotFoundError:
@@ -30,6 +35,7 @@ plt.xlabel('Time (s)', fontsize=14)
 plt.ylabel('Amplitude (X)', fontsize=14)
 plt.legend(loc='upper right')
 plt.tight_layout()
+plt.savefig(filename.replace('.csv', '_time.png'), dpi=150, bbox_inches='tight')
 
 plt.figure(num="Phase Portrait", figsize=(10, 10), dpi=100)
 for i in range(n):
@@ -42,5 +48,7 @@ plt.title('Phase Space trajectories', fontsize=16)
 plt.xlabel('Position (X)', fontsize=14)
 plt.ylabel('Velocity (Y)', fontsize=14)
 plt.tight_layout()
+plt.savefig(filename.replace('.csv', '_phase.png'), dpi=150, bbox_inches='tight')
 
-plt.show()
+if args.show:
+    plt.show()
