@@ -12,12 +12,14 @@ constexpr const char *to_string(ConstructError e) {
   switch (e) {
   case ConstructError::WrongArgSize:
     return "Wrong argument size";
-    return "Unknown error";
   }
 }
 
 template <class ForceFunc = forces::NoopForce, class CouplingFunc = coupling::Inertial>
-class VdPEnsembleSolver : public RK4Solver {
+class VdPEnsembleSolver : public RK4Solver<VdPEnsembleSolver<ForceFunc, CouplingFunc>> {
+  using Base = RK4Solver<VdPEnsembleSolver<ForceFunc, CouplingFunc>>;
+  friend Base;
+
 private:
   int N;
   std::vector<double> omega2;
@@ -27,9 +29,8 @@ private:
   ForceFunc forces;
   CouplingFunc coupling_func;
 
-protected:
   void derivs(double t, const std::vector<double> &state,
-              std::vector<double> &dydx) override;
+              std::vector<double> &dydx);
 
   VdPEnsembleSolver(double t0, const std::vector<double> &y0,
                     const std::vector<double> &freqs,
@@ -42,8 +43,8 @@ public:
   void reset(double t0, const std::vector<double> &y0_new,
              const std::vector<double> &new_freqs,
              const std::vector<double> &new_coupling) {
-    x = t0;
-    y = y0_new;
+    this->x = t0;
+    this->y = y0_new;
     coupling_coeff = new_coupling;
     for (int i = 0; i < N; ++i)
       omega2[i] = new_freqs[i] * new_freqs[i];
@@ -70,13 +71,12 @@ VdPEnsembleSolver<ForceFunc, CouplingFunc>::VdPEnsembleSolver(
     const std::vector<double> &lambda, const std::vector<double> &coupling,
     const std::vector<std::vector<int>> &adj, ForceFunc &func,
     CouplingFunc coupling_func)
-    : RK4Solver(t0, y0), N(freqs.size()), lambda(lambda),
+    : Base(t0, y0), N(freqs.size()), lambda(lambda),
       coupling_coeff(coupling), adj(adj), forces(func),
       coupling_func(coupling_func) {
   omega2.resize(N);
-  for (int i = 0; i < N; ++i) {
+  for (int i = 0; i < N; ++i)
     omega2[i] = freqs[i] * freqs[i];
-  }
 }
 
 template <class ForceFunc, class CouplingFunc>
@@ -85,23 +85,19 @@ void VdPEnsembleSolver<ForceFunc, CouplingFunc>::derivs(
   const auto &impacts = forces(t);
 
   for (int i = 0; i < N; ++i) {
-    int idx_x = 2 * i;
-    int idx_y = 2 * i + 1;
-    double xi = state[idx_x];
-    double yi = state[idx_y];
-
-    double coupling_sum = coupling_func(i, state, adj);
+    const int idx_x = 2 * i;
+    const int idx_y = 2 * i + 1;
+    const double xi = state[idx_x];
+    const double yi = state[idx_y];
 
     dydx[idx_x] = yi;
     dydx[idx_y] = (lambda[i] - xi * xi) * yi - omega2[i] * xi +
-                  coupling_coeff[i] * coupling_sum;
+                  coupling_coeff[i] * coupling_func(i, state, adj);
   }
 
-  for (const auto &impact : impacts) {
-    if (impact.first < (int)dydx.size()) {
+  for (const auto &impact : impacts)
+    if (impact.first < (int)dydx.size())
       dydx[impact.first] += impact.second;
-    }
-  }
 }
 
 } // namespace vdp_ensemble
