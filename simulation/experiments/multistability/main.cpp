@@ -6,6 +6,7 @@
 #include <CLI11.hpp>
 #include <atomic>
 #include <chrono>
+#include <omp.h>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -91,7 +92,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config &cfg,
                                                        eps_coupling, cfg.adj,
                                                        noop, cf);
           if (!opt_solver.has_value()) continue;
-          auto solver = opt_solver.value();
+          auto& solver = opt_solver.value();
 
           for (double t = 0.0; t < cfg.t_trans; t += cfg.dt) solver.step(cfg.dt);
 
@@ -168,7 +169,8 @@ int main(int argc, char **argv) {
 
   std::cerr << "Grid: " << cfg.grid_size << "x" << cfg.grid_size
             << "  epsilons: " << cfg.epsilons.size()
-            << "  n_ic: " << cfg.n_ic << "\n";
+            << "  n_ic: " << cfg.n_ic
+            << "  OpenMP threads: " << omp_get_max_threads() << "\n";
 
   std::vector<Result> results;
   sweep<coupling::Inertial>(0, "Inertial        ", cfg, results);

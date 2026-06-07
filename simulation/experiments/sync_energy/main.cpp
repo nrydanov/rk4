@@ -59,28 +59,29 @@ int main(int argc, char **argv) {
   out << "delta1" << ",delta2" << ",eps" << ",L" << std::endl;
 
   std::vector<tl::expected<HeatmapResult, CalcFailure>> results(n_tasks);
-  std::atomic<size_t> write_idx{0};
 
-#pragma omp parallel for schedule(dynamic) collapse(3)
+#pragma omp parallel for schedule(static) collapse(3)
   for (size_t e = 0; e < epsilons.size(); ++e) {
     for (int i1 = 0; i1 < grid_size; ++i1) {
       for (int i2 = 0; i2 < grid_size; ++i2) {
+        const size_t idx = e * (size_t)grid_size * grid_size + i1 * grid_size + i2;
         double eps = epsilons[e];
-        auto eps_coupling = std::vector<double>(N, eps);
+        thread_local std::vector<double> eps_coupling;
+        eps_coupling.assign(N, eps);
         double delta1 = d_min + i1 * d_step;
         double delta2 = d_min + i2 * d_step;
 
-        auto freqs = std::vector<double>{1.0, 1.0 + delta1, 1.0 + delta2};
+        thread_local std::vector<double> freqs;
+        freqs.assign({1.0, 1.0 + delta1, 1.0 + delta2});
         auto opt_solver =
             vdp_ensemble::VdPEnsembleSolver<forces::NoopForce>::create(
                 N, 0.0, y0, freqs, lambdas, eps_coupling, adj, noop_force);
         if (!opt_solver.has_value()) {
-          results[write_idx.fetch_add(1)] =
-              tl::unexpected(CalcFailure::WrongArguments);
+          results[idx] = tl::unexpected(CalcFailure::WrongArguments);
           continue;
         }
 
-        auto solver = opt_solver.value();
+        auto &solver = opt_solver.value();
 
         for (double t = 0.0; t < t_trans; t += dt) solver.step(dt);
         double L_acc = 0.0;
@@ -91,7 +92,7 @@ int main(int argc, char **argv) {
         }
         double L = 2.0 / (T - t_trans) * L_acc * dt;
 
-        results[write_idx.fetch_add(1)] = HeatmapResult{delta1, delta2, e, L};
+        results[idx] = HeatmapResult{delta1, delta2, e, L};
       }
     }
   }
