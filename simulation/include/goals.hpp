@@ -68,6 +68,22 @@ struct phase_t {
     for (Index i = 0; i < nods; ++i, ux += dim_u) {
       phi[i] = std::atan2(ux[1], ux[0]);
     }
+    return from_phases();
+  }
+
+  // То же, но на вход подаются уже вычисленные фазы raw[i] = atan2(y_i, x_i) —
+  // чтобы не считать atan2 повторно.
+  Real from_raw_phases(const Real *raw) {
+    for (Index i = 0; i < nods; ++i) {
+      phi[i] = raw[i];
+    }
+    return from_phases();
+  }
+
+private:
+
+  // Агрегирует попарные разности фаз из phi[] в метрику когерентности.
+  Real from_phases() const {
     Real Phi = Real(0);
     for (Index i = 0; i < nods1; ++i) {
       const Real phi_i = phi[i];
@@ -79,8 +95,6 @@ struct phase_t {
     Phi = Real(1) - Phi;
     return Phi;
   }
-
-private:
 
   static Real angle_abs_diff(Real phi1, Real phi2) {
     Real dd = std::abs(phi1 - phi2);

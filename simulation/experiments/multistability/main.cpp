@@ -123,13 +123,16 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
           for (double t = cfg.t_trans; t < cfg.T; t += cfg.dt, ++steps) {
             solver->step(cfg.dt);
             const auto &state = solver->getState();
-            pds->push(t, state.data());
+            std::array<double, N> raw_phase;
+            for (int i = 0; i < N; ++i)
+              raw_phase[i] = std::atan2(state[2 * i + 1], state[2 * i]);
+            pds->push_raw(t, raw_phase.data());
             double sum_x = 0.0;
             for (int i = 0; i < N; ++i)
               sum_x += state[2 * i];
             L_acc += sum_x * sum_x;
             A_acc += ampl_goal(state.data());
-            P_acc += (*phase_goal)(state.data());
+            P_acc += phase_goal->from_raw_phases(raw_phase.data());
           }
           double L = 2.0 / (cfg.T - cfg.t_trans) * L_acc * cfg.dt;
           double A = A_acc / steps;

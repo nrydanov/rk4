@@ -38,9 +38,10 @@ run-phase-slopes:
 	./$(BUILD_DIR)/vdp_phase_slopes $(SIM_DIR)/experiments/phase_slopes/$(CONFIG) -o ./$(RESULTS)
 
 # Запуск эксперимента по мультистабильности: 4 варианта связи × случайные НУ
+# Привязка потоков к ядрам (close/cores) — стабильная кэш-локальность на x86/Linux
 run-multistability:
 	@echo "--- Running multistability experiment ---"
-	./$(BUILD_DIR)/vdp_multistability $(SIM_DIR)/experiments/multistability/$(CONFIG) -o ./$(RESULTS)
+	OMP_PROC_BIND=close OMP_PLACES=cores ./$(BUILD_DIR)/vdp_multistability $(SIM_DIR)/experiments/multistability/$(CONFIG) -o ./$(RESULTS)
 
 # Отрисовка траекторий и фазовых портретов с открытием окна
 plot-demo:

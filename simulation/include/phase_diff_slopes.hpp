@@ -50,18 +50,19 @@ public:
   }
 
   void push(Real tt, const Real *uu) {
-    dirty = true;
     for (int ii = 0, mm = 0; ii < nods; ++ii, mm += local_dim) {
       phase[ii](uu[mm+ix], uu[mm+iy]);
     }
-    int mm = 0;
+    accumulate(tt);
+  }
+
+  // То же, но на вход подаются уже вычисленные сырые фазы raw[ii] =
+  // atan2(y_ii, x_ii) — чтобы не считать atan2 повторно.
+  void push_raw(Real tt, const Real *raw) {
     for (int ii = 0; ii < nods; ++ii) {
-      Real phi1 = phase[ii].phi;
-      for (int jj = ii + 1; jj < nods; ++jj) {
-        Real phi2 = phase[jj].phi;
-        slope[mm++].push(tt, phi1-phi2);
-      }
+      phase[ii].push_raw(raw[ii]);
     }
+    accumulate(tt);
   }
 
   Real operator()(int ii, int jj) {
@@ -76,7 +77,21 @@ public:
     return std::abs(slope[mm].A);
   }
   
-private:  
+private:
+
+  // Общая часть push/push_raw: фазы узлов уже разложены в phase[], осталось
+  // протолкнуть попарные разности в линейные регрессии.
+  void accumulate(Real tt) {
+    dirty = true;
+    int mm = 0;
+    for (int ii = 0; ii < nods; ++ii) {
+      Real phi1 = phase[ii].phi;
+      for (int jj = ii + 1; jj < nods; ++jj) {
+        Real phi2 = phase[jj].phi;
+        slope[mm++].push(tt, phi1 - phi2);
+      }
+    }
+  }
 
   static constexpr bool LF_WITH_B = 1;
   static constexpr bool LF_NEED_ERR = 0;
