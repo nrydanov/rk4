@@ -43,6 +43,12 @@ public:
     phase(nods), slope(n_phases), dirty(true)
   {}
 
+  void reset() {
+    for (auto &p : phase) p = unwrap_phase<Real>{};
+    for (auto &s : slope) s.reset();
+    dirty = true;
+  }
+
   void push(Real tt, const Real *uu) {
     dirty = true;
     for (int ii = 0, mm = 0; ii < nods; ++ii, mm += local_dim) {

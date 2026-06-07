@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -61,44 +62,64 @@ void sweep(int coupling_type_id, const std::string &label, const Config &cfg,
   const size_t n_tasks =
       (size_t)cfg.grid_size * cfg.grid_size * cfg.epsilons.size() * cfg.n_ic;
   std::vector<Result> local(n_tasks);
-  std::atomic<size_t> idx{0};
+  std::atomic<size_t> progress{0};
   const size_t report_every = std::max((size_t)1, n_tasks / 50);
   auto start = std::chrono::steady_clock::now();
 
-#pragma omp parallel for schedule(dynamic) collapse(3)
+#pragma omp parallel for schedule(static) collapse(3)
   for (size_t e = 0; e < cfg.epsilons.size(); ++e) {
     for (int i1 = 0; i1 < cfg.grid_size; ++i1) {
       for (int i2 = 0; i2 < cfg.grid_size; ++i2) {
-        double eps = cfg.epsilons[e];
-        double delta1 = cfg.d_min + i1 * cfg.d_step;
-        double delta2 = cfg.d_min + i2 * cfg.d_step;
-        auto freqs = std::vector<double>{1.0, 1.0 + delta1, 1.0 + delta2};
-        auto eps_coupling = std::vector<double>(cfg.N, eps);
+        const size_t base =
+            (e * (size_t)cfg.grid_size * cfg.grid_size + i1 * cfg.grid_size + i2)
+            * cfg.n_ic;
+
+        thread_local std::vector<double> freqs;
+        freqs.assign({1.0, 1.0 + cfg.d_min + i1 * cfg.d_step,
+                           1.0 + cfg.d_min + i2 * cfg.d_step});
+
+        thread_local std::vector<double> eps_coupling;
+        eps_coupling.assign(cfg.N, cfg.epsilons[e]);
+
+        thread_local std::vector<double> y0_local;
+        y0_local.resize(2 * cfg.N);
 
         std::mt19937 rng(cfg.seed ^
                          std::hash<size_t>{}(e * cfg.grid_size * cfg.grid_size +
                                              i1 * cfg.grid_size + i2));
         std::uniform_real_distribution<double> dist(-cfg.ic_range, cfg.ic_range);
 
-        for (int ic = 0; ic < cfg.n_ic; ++ic) {
-          std::vector<double> y0(2 * cfg.N);
-          for (auto &v : y0) v = dist(rng);
+        using Solver = vdp_ensemble::VdPEnsembleSolver<forces::NoopForce, CouplingFunc>;
+        thread_local std::optional<Solver> tl_solver;
+        thread_local std::optional<phase_diff_slopes<double>> tl_pds;
+        thread_local std::optional<phase_t<double, int>> tl_phase_goal;
 
-          forces::NoopForce noop;
-          CouplingFunc cf{};
-          auto opt_solver = vdp_ensemble::VdPEnsembleSolver<
-              forces::NoopForce, CouplingFunc>::create(cfg.N, 0.0, y0, freqs,
-                                                       cfg.lambdas,
-                                                       eps_coupling, cfg.adj,
-                                                       noop, cf);
-          if (!opt_solver.has_value()) continue;
-          auto& solver = opt_solver.value();
+        forces::NoopForce noop;
+        CouplingFunc cf{};
+
+        for (int ic = 0; ic < cfg.n_ic; ++ic) {
+          for (auto &v : y0_local) v = dist(rng);
+
+          if (!tl_solver) {
+            auto opt = Solver::create(cfg.N, 0.0, y0_local, freqs,
+                                      cfg.lambdas, eps_coupling, cfg.adj, noop, cf);
+            if (!opt.has_value()) continue;
+            tl_solver.emplace(std::move(*opt));
+          } else {
+            tl_solver->reset(0.0, y0_local, freqs, eps_coupling);
+          }
+          auto &solver = *tl_solver;
 
           for (double t = 0.0; t < cfg.t_trans; t += cfg.dt) solver.step(cfg.dt);
 
-          phase_diff_slopes<double> pds(cfg.N, 2, 0, 1);
+          if (!tl_pds) tl_pds.emplace(cfg.N, 2, 0, 1);
+          else tl_pds->reset();
+          auto &pds = *tl_pds;
+
+          if (!tl_phase_goal) tl_phase_goal.emplace(2, cfg.N);
+          auto &phase_goal = *tl_phase_goal;
+
           ampl_t<double, int> ampl_goal(2, cfg.N);
-          phase_t<double, int> phase_goal(2, cfg.N);
 
           double L_acc = 0.0, A_acc = 0.0, P_acc = 0.0;
           int steps = 0;
@@ -116,16 +137,18 @@ void sweep(int coupling_type_id, const std::string &label, const Config &cfg,
           double A = A_acc / steps;
           double P = P_acc / steps;
 
-          size_t pos = idx.fetch_add(1);
-          local[pos] = {delta1,    delta2,    eps,   coupling_type_id,
-                        y0[0],     y0[1],     y0[2], y0[3],
-                        y0[4],     y0[5],     L,     A,
-                        P,         pds(0, 1), pds(0, 2), pds(1, 2)};
+          local[base + ic] = {cfg.d_min + i1 * cfg.d_step,
+                              cfg.d_min + i2 * cfg.d_step,
+                              cfg.epsilons[e],
+                              coupling_type_id,
+                              y0_local[0], y0_local[1], y0_local[2],
+                              y0_local[3], y0_local[4], y0_local[5],
+                              L, A, P,
+                              pds(0, 1), pds(0, 2), pds(1, 2)};
 
-          if (pos % report_every == 0) {
-#pragma omp critical
-            print_progress(idx.load(), n_tasks, start, label);
-          }
+          size_t done = progress.fetch_add(1) + 1;
+          if (done % report_every == 0)
+            print_progress(done, n_tasks, start, label);
         }
       }
     }
@@ -133,8 +156,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config &cfg,
 
   print_progress(n_tasks, n_tasks, start, label);
   std::cerr << "\n";
-  size_t n = idx.load();
-  out.insert(out.end(), local.begin(), local.begin() + n);
+  out.insert(out.end(), local.begin(), local.end());
 }
 
 int main(int argc, char **argv) {

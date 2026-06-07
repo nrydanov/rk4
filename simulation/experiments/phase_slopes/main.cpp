@@ -5,6 +5,7 @@
 #include <CLI11.hpp>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 #include <yaml-cpp/yaml.h>
@@ -77,19 +78,30 @@ int main(int argc, char **argv) {
 
         thread_local std::vector<double> freqs;
         freqs.assign({1.0, 1.0 + delta1, 1.0 + delta2});
-        auto opt_solver =
-            vdp_ensemble::VdPEnsembleSolver<forces::NoopForce>::create(
-                N, 0.0, y0, freqs, lambdas, eps_coupling, adj, noop_force);
-        if (!opt_solver.has_value()) {
-          results[idx] = tl::unexpected(CalcFailure::WrongArguments);
-          continue;
-        }
 
-        auto &solver = opt_solver.value();
+        using Solver = vdp_ensemble::VdPEnsembleSolver<forces::NoopForce>;
+        thread_local std::optional<Solver> tl_solver;
+        if (!tl_solver) {
+          auto opt = Solver::create(N, 0.0, y0, freqs, lambdas, eps_coupling, adj, noop_force);
+          if (!opt.has_value()) {
+            results[idx] = tl::unexpected(CalcFailure::WrongArguments);
+            continue;
+          }
+          tl_solver.emplace(std::move(*opt));
+        } else {
+          tl_solver->reset(0.0, y0, freqs, eps_coupling);
+        }
+        auto &solver = *tl_solver;
 
         for (double t = 0.0; t < t_trans; t += dt) solver.step(dt);
 
-        phase_diff_slopes<double> pds(N, 2, 0, 1);
+        thread_local std::optional<phase_diff_slopes<double>> tl_pds;
+        if (!tl_pds) {
+          tl_pds.emplace(N, 2, 0, 1);
+        } else {
+          tl_pds->reset();
+        }
+        auto &pds = *tl_pds;
         double L_acc = 0.0;
         int steps = 0;
         for (double t = t_trans; t < T; t += dt, ++steps) {

@@ -39,6 +39,16 @@ protected:
                     CouplingFunc coupling_func);
 
 public:
+  void reset(double t0, const std::vector<double> &y0_new,
+             const std::vector<double> &new_freqs,
+             const std::vector<double> &new_coupling) {
+    x = t0;
+    y = y0_new;
+    coupling_coeff = new_coupling;
+    for (int i = 0; i < N; ++i)
+      omega2[i] = new_freqs[i] * new_freqs[i];
+  }
+
   static tl::expected<VdPEnsembleSolver, ConstructError>
   create(size_t N, double t0, const std::vector<double> &y0,
          const std::vector<double> &freqs, const std::vector<double> &lambda,
