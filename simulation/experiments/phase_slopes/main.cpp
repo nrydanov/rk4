@@ -1,4 +1,6 @@
-#include "forces.h"
+#include "forces.hpp"
+#include "goals.hpp"
+#include "phase_diff_slopes.hpp"
 #include "vdp_ensemble.hpp"
 #include <CLI11.hpp>
 #include <fstream>
@@ -7,17 +9,20 @@
 #include <vector>
 #include <yaml-cpp/yaml.h>
 
-struct HeatmapResult {
+struct PhaseSlopesResult {
   double delta1;
   double delta2;
   size_t eps_index;
   double L;
+  double s01;
+  double s02;
+  double s12;
 };
 
 enum class CalcFailure { WrongArguments };
 
 int main(int argc, char **argv) {
-  CLI::App app{"Van der Pol Ensemble Simulation"};
+  CLI::App app{"Van der Pol Phase Slopes Experiment"};
   std::string config_path;
   std::string output_path;
   app.add_option("config", config_path)->required()->check(CLI::ExistingFile);
@@ -30,18 +35,12 @@ int main(int argc, char **argv) {
   int N = config["N"].as<size_t>();
   auto y0 = config["y0"].as<std::vector<double>>();
   auto lambdas = config["lambdas"].as<std::vector<double>>();
-  auto coupling = config["coupling"].as<std::vector<double>>();
   auto adj = config["adj"].as<std::vector<std::vector<int>>>();
 
   if (y0.size() != static_cast<size_t>(2 * N)) {
     std::cerr << "y0 size must be 2 * N";
     return 1;
   }
-
-  const auto f_node = config["force"];
-  const auto pins = f_node["pins"].as<std::vector<int>>();
-  const auto alpha = f_node["alpha"].as<std::vector<double>>();
-  const auto fomg = f_node["fomg"].as<std::vector<double>>();
 
   const auto s_node = config["sim"];
   const double T = s_node["T"].as<double>();
@@ -61,26 +60,24 @@ int main(int argc, char **argv) {
     std::cerr << "Got an error opening output file";
     return 1;
   }
-  out << "delta1" << ",delta2" << ",eps" << ",L" << std::endl;
+  out << "delta1" << ",delta2" << ",eps" << ",L" << ",s01" << ",s02" << ",s12" << std::endl;
 
-  std::vector<tl::expected<HeatmapResult, CalcFailure>> results(n_tasks);
+  std::vector<tl::expected<PhaseSlopesResult, CalcFailure>> results(n_tasks);
   std::atomic<size_t> write_idx{0};
 
 #pragma omp parallel for schedule(dynamic) collapse(3)
   for (size_t e = 0; e < epsilons.size(); ++e) {
-    double eps = epsilons[e];
-    auto coupling = std::vector<double>{eps, eps, eps};
-
     for (int i1 = 0; i1 < grid_size; ++i1) {
-      double delta1 = d_min + i1 * d_step;
-
       for (int i2 = 0; i2 < grid_size; ++i2) {
+        double eps = epsilons[e];
+        auto eps_coupling = std::vector<double>(N, eps);
+        double delta1 = d_min + i1 * d_step;
         double delta2 = d_min + i2 * d_step;
 
         auto freqs = std::vector<double>{1.0, 1.0 + delta1, 1.0 + delta2};
         auto opt_solver =
             vdp_ensemble::VdPEnsembleSolver<forces::NoopForce>::create(
-                N, 0.0, y0, freqs, lambdas, coupling, adj, noop_force);
+                N, 0.0, y0, freqs, lambdas, eps_coupling, adj, noop_force);
         if (!opt_solver.has_value()) {
           results[write_idx.fetch_add(1)] =
               tl::unexpected(CalcFailure::WrongArguments);
@@ -89,32 +86,37 @@ int main(int argc, char **argv) {
 
         auto solver = opt_solver.value();
 
-        for (double t = 0.0; t < t_trans; t += dt) {
-          solver.step(dt);
-        }
+        for (double t = 0.0; t < t_trans; t += dt) solver.step(dt);
 
-        float L = 0.0f;
-        double acc = 0.0;
-        for (double t = t_trans; t < T; t += dt) {
+        phase_diff_slopes<double> pds(N, 2, 0, 1);
+        double L_acc = 0.0;
+        int steps = 0;
+        for (double t = t_trans; t < T; t += dt, ++steps) {
           solver.step(dt);
-          auto state = solver.getState();
-          double sum_x = state[0] + state[2] + state[4];
-          acc += sum_x * sum_x;
+          const auto &state = solver.getState();
+          pds.push(t, state.data());
+          L_acc += goals::coherence(state.data(), N);
         }
-        L = static_cast<float>(2.0 / (T - t_trans) * acc * dt);
+        double L = 2.0 / (T - t_trans) * L_acc * dt;
 
-        results[write_idx.fetch_add(1)] = {delta1, delta2, e, L};
+        double s01 = pds(0, 1);
+        double s02 = pds(0, 2);
+        double s12 = pds(1, 2);
+
+        results[write_idx.fetch_add(1)] = PhaseSlopesResult{delta1, delta2, e, L, s01, s02, s12};
       }
     }
   }
 
   for (auto &r : results) {
     if (!r.has_value()) {
-      out << "nan" << ",nan" << ",nan" << ",nan" << std::endl;
+      out << "nan" << ",nan" << ",nan" << ",nan" << ",nan" << ",nan" << ",nan" << std::endl;
     } else {
       auto value = r.value();
       out << value.delta1 << "," << value.delta2 << ","
-          << epsilons[value.eps_index] << "," << value.L << std::endl;
+          << epsilons[value.eps_index] << ","
+          << value.L << ","
+          << value.s01 << "," << value.s02 << "," << value.s12 << std::endl;
     }
   }
 

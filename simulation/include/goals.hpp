@@ -1,0 +1,119 @@
+#ifndef goals_hpp
+#define goals_hpp
+
+#include <cmath>
+#include <numbers>
+#include <string>
+#include <vector>
+
+template<typename Real, typename Index>
+struct ampl_t {
+
+  const Index dim_u;
+  const Index nods;
+  const Index size;
+  const Real inv_nods;
+  const Real inv_dim_u;
+  const Real inv_size;
+  const static std::string name;
+
+  ampl_t(Index dim_u, Index nods) :
+    dim_u(dim_u),
+    nods(nods),
+    size(dim_u * nods),
+    inv_nods(Real(1) / nods),
+    inv_dim_u(Real(1) / dim_u),
+    inv_size(Real(1) / size)
+  {}
+
+  Real operator()(const Real *const uu) const {
+    Real A = Real(0);
+    for (Index i0 = 0; i0 < dim_u; ++i0) {
+      Real sum = Real(0);
+      for (Index i = i0; i < size; i += dim_u) {sum += uu[i];}
+      sum *= inv_nods;
+      A += sum*sum;
+    }
+    A *= inv_dim_u;
+    return A;
+  }
+};
+
+template<typename Real, typename Index>
+const std::string ampl_t<Real, Index>::name = "ampl_t";
+
+
+template<typename Real, typename Index>
+struct phase_t {
+
+  static constexpr Real pi = std::numbers::pi_v<Real>;
+  static constexpr Real two_pi = Real(2) * std::numbers::pi_v<Real>;
+
+  const Index dim_u;
+  const Index nods;
+  const Index nods1;
+  const Real inv_norm;
+  std::vector<Real> phi;
+  static const std::string name;
+
+  phase_t(Index dim_u, Index nods) :
+    dim_u(dim_u),
+    nods(nods), nods1(nods-1),
+    inv_norm( Real(2) / (pi * nods * nods1) ),
+    phi(nods)
+  {}
+
+  Real operator()(const Real *const uu) {
+    const Real *ux = uu;
+    for (Index i = 0; i < nods; ++i, ux += dim_u) {
+      phi[i] = std::atan2(ux[1], ux[0]);
+    }
+    Real Phi = Real(0);
+    for (Index i = 0; i < nods1; ++i) {
+      const Real phi_i = phi[i];
+      for (Index j = i + 1; j < nods; ++j) {
+        Phi += angle_abs_diff(phi_i, phi[j]);
+      }
+    }
+    Phi *= inv_norm;
+    Phi = Real(1) - Phi;
+    return Phi;
+  }
+
+private:
+
+  static Real angle_abs_diff(Real phi1, Real phi2) {
+    Real dd = std::abs(phi1 - phi2);
+    if (dd > pi) {dd = two_pi - dd;}
+    return dd;
+  }
+
+};
+
+template<typename Real, typename Index>
+const std::string phase_t<Real, Index>::name = "phase_t";
+
+namespace goals {
+
+// L = (x0 + x1 + ... + x_{N-1})^2 — мгновенное значение
+inline double coherence(const double *state, int N) {
+  double sum = 0.0;
+  for (int i = 0; i < N; ++i) sum += state[2 * i];
+  return sum * sum;
+}
+
+// ampl_t — мгновенное значение
+inline double ampl(const double *state, int N) {
+  ampl_t<double, int> goal(2, N);
+  return goal(state);
+}
+
+// phase_t — мгновенное значение
+inline double phase_coherence(const double *state, int N) {
+  phase_t<double, int> goal(2, N);
+  return goal(state);
+}
+
+} // namespace goals
+
+#endif

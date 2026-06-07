@@ -258,3 +258,5 @@ pyrightconfig.json
 
 *.png
 *.csv
+tasks
+articles

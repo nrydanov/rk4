@@ -1,4 +1,4 @@
-#include "forces.h"
+#include "forces.hpp"
 #include "vdp_ensemble.hpp"
 #include <CLI11.hpp>
 #include <fstream>

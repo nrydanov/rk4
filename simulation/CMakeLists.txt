@@ -1,24 +1,21 @@
 cmake_minimum_required(VERSION 3.10)
 project(VanDerPolSimulation)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(OpenMP REQUIRED)
 
-file(GLOB_RECURSE CORE_SOURCES
-    "src/solver.cpp"
-    "src/forces.cpp"
-)
-
 set(MAIN_SIM src/demo.cpp)
 
-set(MAIN_MAPS experiments/heatmap/main.cpp)
+set(MAIN_SYNC_ENERGY experiments/sync_energy/main.cpp)
+set(MAIN_PHASE_SLOPES experiments/phase_slopes/main.cpp)
+set(MAIN_MULTISTABILITY experiments/multistability/main.cpp)
 
-add_library(vdp_core STATIC ${CORE_SOURCES})
+add_library(vdp_core INTERFACE)
 
-target_include_directories(vdp_core PUBLIC
+target_include_directories(vdp_core INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external
 )
@@ -39,18 +36,38 @@ target_link_libraries(vdp_sim PRIVATE
     yaml-cpp::yaml-cpp
 )
 
-# Heatmap
-add_executable(vdp_heatmap ${MAIN_MAPS})
-target_link_libraries(vdp_heatmap PRIVATE
+# Sync energy experiment (collective signal power)
+add_executable(vdp_sync_energy ${MAIN_SYNC_ENERGY})
+target_link_libraries(vdp_sync_energy PRIVATE
+    vdp_core
+    yaml-cpp::yaml-cpp
+    OpenMP::OpenMP_CXX
+)
+
+# Phase slopes experiment (phase difference linear regression)
+add_executable(vdp_phase_slopes ${MAIN_PHASE_SLOPES})
+target_link_libraries(vdp_phase_slopes PRIVATE
+    vdp_core
+    yaml-cpp::yaml-cpp
+    OpenMP::OpenMP_CXX
+)
+
+# Multistability experiment (4 coupling types x random initial conditions)
+add_executable(vdp_multistability ${MAIN_MULTISTABILITY})
+target_link_libraries(vdp_multistability PRIVATE
     vdp_core
     yaml-cpp::yaml-cpp
     OpenMP::OpenMP_CXX
 )
 
 if(MSVC)
-    target_compile_options(vdp_sim  PRIVATE /W4)
-    target_compile_options(vdp_heatmap PRIVATE /W4)
+    target_compile_options(vdp_sim             PRIVATE /W4)
+    target_compile_options(vdp_sync_energy     PRIVATE /W4)
+    target_compile_options(vdp_phase_slopes    PRIVATE /W4)
+    target_compile_options(vdp_multistability  PRIVATE /W4)
 else()
-    target_compile_options(vdp_sim  PRIVATE -Wall -Wextra)
-    target_compile_options(vdp_heatmap PRIVATE -Wall -Wextra)
+    target_compile_options(vdp_sim             PRIVATE -Wall -Wextra)
+    target_compile_options(vdp_sync_energy     PRIVATE -Wall -Wextra)
+    target_compile_options(vdp_phase_slopes    PRIVATE -Wall -Wextra)
+    target_compile_options(vdp_multistability  PRIVATE -Wall -Wextra)
 endif()
