@@ -2,102 +2,58 @@
 #include "coupling.hpp"
 #include "forces.hpp"
 #include "solver.hpp"
-#include <tl/expected.hpp>
+#include <array>
 
 namespace vdp_ensemble {
 
-enum class ConstructError { WrongArgSize };
+// Ансамбль из N связанных осцилляторов Ван дер Поля. N фиксирован на этапе
+// компиляции (по умолчанию 3): всё состояние и параметры — std::array внутри
+// объекта, без heap. Для произвольного N — статическая инстанциация по нужным
+// значениям с динамической диспетчеризацией на стороне вызова.
+template <int N = 3, class ForceFunc = forces::NoopForce,
+          class CouplingFunc = coupling::Inertial>
+class VdPEnsembleSolver
+    : public RK4Solver<VdPEnsembleSolver<N, ForceFunc, CouplingFunc>, 2 * N> {
+  friend RK4Solver<VdPEnsembleSolver, 2 * N>;
 
-constexpr const char *to_string(ConstructError e) {
-  switch (e) {
-  case ConstructError::WrongArgSize:
-    return "Wrong argument size";
+public:
+  using State = std::array<double, 2 * N>;
+  using Params = std::array<double, N>;
+  using Adj = std::array<std::array<int, N>, N>;
+
+  VdPEnsembleSolver(const State &y0, const Params &freqs, const Params &lambda,
+                    const Params &coupling, const Adj &adj, ForceFunc func,
+                    CouplingFunc cf = {})
+      : lambda(lambda), coupling_coeff(coupling), adj(adj), forces(func),
+        coupling_func(cf) {
+    this->y = y0;
+    for (int i = 0; i < N; ++i) omega2[i] = freqs[i] * freqs[i];
   }
-}
 
-template <class ForceFunc = forces::NoopForce, class CouplingFunc = coupling::Inertial>
-class VdPEnsembleSolver : public RK4Solver<VdPEnsembleSolver<ForceFunc, CouplingFunc>> {
-  using Base = RK4Solver<VdPEnsembleSolver<ForceFunc, CouplingFunc>>;
-  friend Base;
+  void reset(const State &y0, const Params &freqs, const Params &coupling) {
+    this->x = 0.0;
+    this->y = y0;
+    coupling_coeff = coupling;
+    for (int i = 0; i < N; ++i) omega2[i] = freqs[i] * freqs[i];
+  }
 
 private:
-  int N;
-  std::vector<double> omega2;
-  std::vector<double> lambda;
-  std::vector<double> coupling_coeff;
-  std::vector<std::vector<int>> adj;
+  Params omega2{}, lambda, coupling_coeff;
+  Adj adj;
   ForceFunc forces;
   CouplingFunc coupling_func;
 
-  void derivs(double t, const std::vector<double> &state,
-              std::vector<double> &dydx);
-
-  VdPEnsembleSolver(double t0, const std::vector<double> &y0,
-                    const std::vector<double> &freqs,
-                    const std::vector<double> &lambda,
-                    const std::vector<double> &coupling,
-                    const std::vector<std::vector<int>> &adj, ForceFunc &func,
-                    CouplingFunc coupling_func);
-
-public:
-  void reset(double t0, const std::vector<double> &y0_new,
-             const std::vector<double> &new_freqs,
-             const std::vector<double> &new_coupling) {
-    this->x = t0;
-    this->y = y0_new;
-    coupling_coeff = new_coupling;
-    for (int i = 0; i < N; ++i)
-      omega2[i] = new_freqs[i] * new_freqs[i];
-  }
-
-  static tl::expected<VdPEnsembleSolver, ConstructError>
-  create(size_t N, double t0, const std::vector<double> &y0,
-         const std::vector<double> &freqs, const std::vector<double> &lambda,
-         const std::vector<double> &coupling,
-         const std::vector<std::vector<int>> &adj, ForceFunc &func,
-         CouplingFunc coupling_func = CouplingFunc{}) {
-    if (N != lambda.size() || N != coupling.size() || N != adj.size() ||
-        N != adj[0].size() || 2 * N != y0.size()) {
-      return tl::make_unexpected(ConstructError::WrongArgSize);
+  void derivs(double t, const State &state, State &dydx) {
+    const auto &impacts = forces(t);
+    for (int i = 0; i < N; ++i) {
+      const double xi = state[2 * i], yi = state[2 * i + 1];
+      dydx[2 * i] = yi;
+      dydx[2 * i + 1] = (lambda[i] - xi * xi) * yi - omega2[i] * xi +
+                        coupling_coeff[i] * coupling_func(i, state, adj);
     }
-    return VdPEnsembleSolver(t0, y0, freqs, lambda, coupling, adj, func,
-                             coupling_func);
+    for (const auto &im : impacts)
+      if (im.first < 2 * N) dydx[im.first] += im.second;
   }
 };
-
-template <class ForceFunc, class CouplingFunc>
-VdPEnsembleSolver<ForceFunc, CouplingFunc>::VdPEnsembleSolver(
-    double t0, const std::vector<double> &y0, const std::vector<double> &freqs,
-    const std::vector<double> &lambda, const std::vector<double> &coupling,
-    const std::vector<std::vector<int>> &adj, ForceFunc &func,
-    CouplingFunc coupling_func)
-    : Base(t0, y0), N(freqs.size()), lambda(lambda),
-      coupling_coeff(coupling), adj(adj), forces(func),
-      coupling_func(coupling_func) {
-  omega2.resize(N);
-  for (int i = 0; i < N; ++i)
-    omega2[i] = freqs[i] * freqs[i];
-}
-
-template <class ForceFunc, class CouplingFunc>
-void VdPEnsembleSolver<ForceFunc, CouplingFunc>::derivs(
-    double t, const std::vector<double> &state, std::vector<double> &dydx) {
-  const auto &impacts = forces(t);
-
-  for (int i = 0; i < N; ++i) {
-    const int idx_x = 2 * i;
-    const int idx_y = 2 * i + 1;
-    const double xi = state[idx_x];
-    const double yi = state[idx_y];
-
-    dydx[idx_x] = yi;
-    dydx[idx_y] = (lambda[i] - xi * xi) * yi - omega2[i] * xi +
-                  coupling_coeff[i] * coupling_func(i, state, adj);
-  }
-
-  for (const auto &impact : impacts)
-    if (impact.first < (int)dydx.size())
-      dydx[impact.first] += impact.second;
-}
 
 } // namespace vdp_ensemble

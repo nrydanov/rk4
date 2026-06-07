@@ -1,8 +1,11 @@
+#include "config_array.hpp"
 #include "forces.hpp"
 #include "goals.hpp"
 #include "phase_diff_slopes.hpp"
 #include "vdp_ensemble.hpp"
 #include <CLI11.hpp>
+#include <array>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -11,127 +14,101 @@
 #include <yaml-cpp/yaml.h>
 
 struct PhaseSlopesResult {
-  double delta1;
-  double delta2;
-  size_t eps_index;
-  double L;
-  double s01;
-  double s02;
-  double s12;
+  double delta1, delta2, eps, L, s01, s02, s12;
 };
 
-enum class CalcFailure { WrongArguments };
+template <int N>
+int run(const YAML::Node &config, const std::string &output_path) {
+  const auto y0 = to_array<2 * N>(config["y0"].as<std::vector<double>>());
+  const auto lambdas = to_array<N>(config["lambdas"].as<std::vector<double>>());
+  const auto adj = to_adj<N>(config["adj"].as<std::vector<std::vector<int>>>());
 
-int main(int argc, char **argv) {
-  CLI::App app{"Van der Pol Phase Slopes Experiment"};
-  std::string config_path;
-  std::string output_path;
-  app.add_option("config", config_path)->required()->check(CLI::ExistingFile);
-  app.add_option("-o,--output", output_path, "Output CSV file path")
-      ->check(CLI::NonexistentPath | CLI::ExistingPath);
-  CLI11_PARSE(app, argc, argv);
-
-  YAML::Node config = YAML::LoadFile(config_path);
-
-  int N = config["N"].as<size_t>();
-  auto y0 = config["y0"].as<std::vector<double>>();
-  auto lambdas = config["lambdas"].as<std::vector<double>>();
-  auto adj = config["adj"].as<std::vector<std::vector<int>>>();
-
-  if (y0.size() != static_cast<size_t>(2 * N)) {
-    std::cerr << "y0 size must be 2 * N";
-    return 1;
-  }
-
-  const auto s_node = config["sim"];
-  const double T = s_node["T"].as<double>();
-  const double dt = s_node["dt"].as<double>();
-  const double d_step = s_node["d_step"].as<double>();
-  const double d_min = s_node["d_min"].as<double>();
-  const double d_max = s_node["d_max"].as<double>();
-  const double t_trans = s_node["t_transition"].as<double>();
-  const auto epsilons = s_node["epsilons"].as<std::vector<double>>();
+  const auto s = config["sim"];
+  const double T = s["T"].as<double>();
+  const double dt = s["dt"].as<double>();
+  const double d_step = s["d_step"].as<double>();
+  const double d_min = s["d_min"].as<double>();
+  const double d_max = s["d_max"].as<double>();
+  const double t_trans = s["t_transition"].as<double>();
+  const auto epsilons = s["epsilons"].as<std::vector<double>>();
   const int grid_size = static_cast<int>(std::abs(d_max - d_min) / d_step + 1);
-  const size_t n_tasks = grid_size * grid_size * epsilons.size();
-
-  forces::NoopForce noop_force;
+  const size_t n_tasks = (size_t)grid_size * grid_size * epsilons.size();
 
   std::ofstream out(output_path);
   if (!out.is_open()) {
     std::cerr << "Got an error opening output file";
     return 1;
   }
-  out << "delta1" << ",delta2" << ",eps" << ",L" << ",s01" << ",s02" << ",s12" << std::endl;
+  out << "delta1,delta2,eps,L,s01,s02,s12\n";
 
-  std::vector<tl::expected<PhaseSlopesResult, CalcFailure>> results(n_tasks);
+  std::vector<PhaseSlopesResult> results(n_tasks);
 
 #pragma omp parallel for schedule(static) collapse(3)
   for (size_t e = 0; e < epsilons.size(); ++e) {
     for (int i1 = 0; i1 < grid_size; ++i1) {
       for (int i2 = 0; i2 < grid_size; ++i2) {
-        const size_t idx = e * (size_t)grid_size * grid_size + i1 * grid_size + i2;
-        double eps = epsilons[e];
-        thread_local std::vector<double> eps_coupling;
-        eps_coupling.assign(N, eps);
-        double delta1 = d_min + i1 * d_step;
-        double delta2 = d_min + i2 * d_step;
+        const size_t idx =
+            e * (size_t)grid_size * grid_size + i1 * grid_size + i2;
+        const double eps = epsilons[e];
+        const double delta1 = d_min + i1 * d_step;
+        const double delta2 = d_min + i2 * d_step;
 
-        thread_local std::vector<double> freqs;
-        freqs.assign({1.0, 1.0 + delta1, 1.0 + delta2});
+        std::array<double, N> freqs{1.0, 1.0 + delta1, 1.0 + delta2};
+        std::array<double, N> eps_coupling;
+        eps_coupling.fill(eps);
 
-        using Solver = vdp_ensemble::VdPEnsembleSolver<forces::NoopForce>;
-        thread_local std::optional<Solver> tl_solver;
-        if (!tl_solver) {
-          auto opt = Solver::create(N, 0.0, y0, freqs, lambdas, eps_coupling, adj, noop_force);
-          if (!opt.has_value()) {
-            results[idx] = tl::unexpected(CalcFailure::WrongArguments);
-            continue;
-          }
-          tl_solver.emplace(std::move(*opt));
-        } else {
-          tl_solver->reset(0.0, y0, freqs, eps_coupling);
-        }
-        auto &solver = *tl_solver;
+        using Solver = vdp_ensemble::VdPEnsembleSolver<N>;
+        thread_local std::optional<Solver> solver;
+        if (!solver)
+          solver.emplace(y0, freqs, lambdas, eps_coupling, adj,
+                         forces::NoopForce{});
+        else
+          solver->reset(y0, freqs, eps_coupling);
 
-        for (double t = 0.0; t < t_trans; t += dt) solver.step(dt);
+        for (double t = 0.0; t < t_trans; t += dt)
+          solver->step(dt);
 
-        thread_local std::optional<phase_diff_slopes<double>> tl_pds;
-        if (!tl_pds) {
-          tl_pds.emplace(N, 2, 0, 1);
-        } else {
-          tl_pds->reset();
-        }
-        auto &pds = *tl_pds;
+        thread_local std::optional<phase_diff_slopes<double>> pds;
+        if (!pds)
+          pds.emplace(N, 2, 0, 1);
+        else
+          pds->reset();
+
         double L_acc = 0.0;
-        int steps = 0;
-        for (double t = t_trans; t < T; t += dt, ++steps) {
-          solver.step(dt);
-          const auto &state = solver.getState();
-          pds.push(t, state.data());
+        for (double t = t_trans; t < T; t += dt) {
+          solver->step(dt);
+          const auto &state = solver->getState();
+          pds->push(t, state.data());
           L_acc += goals::coherence(state.data(), N);
         }
-        double L = 2.0 / (T - t_trans) * L_acc * dt;
-
-        double s01 = pds(0, 1);
-        double s02 = pds(0, 2);
-        double s12 = pds(1, 2);
-
-        results[idx] = PhaseSlopesResult{delta1, delta2, e, L, s01, s02, s12};
+        const double L = 2.0 / (T - t_trans) * L_acc * dt;
+        results[idx] = {delta1,       delta2,       eps,         L,
+                        (*pds)(0, 1), (*pds)(0, 2), (*pds)(1, 2)};
       }
     }
   }
 
-  for (auto &r : results) {
-    if (!r.has_value()) {
-      out << "nan" << ",nan" << ",nan" << ",nan" << ",nan" << ",nan" << ",nan" << std::endl;
-    } else {
-      auto value = r.value();
-      out << value.delta1 << "," << value.delta2 << ","
-          << epsilons[value.eps_index] << ","
-          << value.L << ","
-          << value.s01 << "," << value.s02 << "," << value.s12 << std::endl;
-    }
-  }
-
+  for (const auto &r : results)
+    out << r.delta1 << "," << r.delta2 << "," << r.eps << "," << r.L << ","
+        << r.s01 << "," << r.s02 << "," << r.s12 << "\n";
   return 0;
+}
+
+int main(int argc, char **argv) {
+  CLI::App app{"Van der Pol Phase Slopes Experiment"};
+  std::string config_path, output_path;
+  app.add_option("config", config_path)->required()->check(CLI::ExistingFile);
+  app.add_option("-o,--output", output_path, "Output CSV file path")
+      ->check(CLI::NonexistentPath | CLI::ExistingPath);
+  CLI11_PARSE(app, argc, argv);
+
+  YAML::Node config = YAML::LoadFile(config_path);
+  const int N = config["N"].as<int>();
+  switch (N) {
+  case 3:
+    return run<3>(config, output_path);
+  default:
+    std::cerr << "phase_slopes supports only N=3 (got " << N << ")\n";
+    return 1;
+  }
 }
