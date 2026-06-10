@@ -2,6 +2,7 @@
 #define goals_hpp
 
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -9,33 +10,32 @@
 template<typename Real, typename Index>
 struct ampl_t {
 
+  static constexpr Real TINY = 100 * std::numeric_limits<Real>::epsilon();
+
   const Index dim_u;
   const Index nods;
   const Index size;
-  const Real inv_nods;
-  const Real inv_dim_u;
-  const Real inv_size;
   const static std::string name;
 
   ampl_t(Index dim_u, Index nods) :
     dim_u(dim_u),
     nods(nods),
-    size(dim_u * nods),
-    inv_nods(Real(1) / nods),
-    inv_dim_u(Real(1) / dim_u),
-    inv_size(Real(1) / size)
+    size(dim_u * nods)
   {}
 
   Real operator()(const Real *const uu) const {
     Real A = Real(0);
+    Real A2 = Real(0);
     for (Index i0 = 0; i0 < dim_u; ++i0) {
       Real sum = Real(0);
-      for (Index i = i0; i < size; i += dim_u) {sum += uu[i];}
-      sum *= inv_nods;
-      A += sum*sum;
+      for (Index i = i0; i < size; i += dim_u) {
+        Real xx = uu[i];
+        A2 += xx * xx;
+        sum += xx;
+      }
+      A += sum * sum;
     }
-    A *= inv_dim_u;
-    return A;
+    return A / (A2 * nods + TINY);
   }
 };
 
