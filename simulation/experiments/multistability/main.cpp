@@ -35,7 +35,8 @@ template <int N> struct Config {
 struct Result {
   double delta1, delta2, eps;
   int coupling_type;
-  double x0, y0, x1, y1, x2, y2;
+  double x0, y0, x1, y1, x2, y2;       // начальные условия
+  double xf0, yf0, xf1, yf1, xf2, yf2; // конечное состояние
   double L, A, P;
   double s01, s02, s12;
 };
@@ -140,6 +141,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
           double A = A_acc / steps;
           double P = P_acc / steps;
 
+          const auto &yf = solver->getState();
           local[base + ic] = {delta1,
                               delta2,
                               cfg.epsilons[e],
@@ -150,6 +152,12 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
                               y0[3],
                               y0[4],
                               y0[5],
+                              yf[0],
+                              yf[1],
+                              yf[2],
+                              yf[3],
+                              yf[4],
+                              yf[5],
                               L,
                               A,
                               P,
@@ -212,13 +220,15 @@ int run(const YAML::Node &yaml, const std::string &config_path,
   // max_digits10 — чтобы по записанным НУ можно было в точности повторить
   // отдельную траекторию
   out << std::setprecision(std::numeric_limits<double>::max_digits10);
-  out << "delta1,delta2,eps,coupling_type,x0,y0,x1,y1,x2,y2,L,A,P,s01,s02,"
-         "s12\n";
+  out << "delta1,delta2,eps,coupling_type,x0,y0,x1,y1,x2,y2,"
+         "xf0,yf0,xf1,yf1,xf2,yf2,L,A,P,s01,s02,s12\n";
   for (auto &r : results) {
     out << r.delta1 << "," << r.delta2 << "," << r.eps << "," << r.coupling_type
         << "," << r.x0 << "," << r.y0 << "," << r.x1 << "," << r.y1 << ","
-        << r.x2 << "," << r.y2 << "," << r.L << "," << r.A << "," << r.P << ","
-        << r.s01 << "," << r.s02 << "," << r.s12 << "\n";
+        << r.x2 << "," << r.y2 << "," << r.xf0 << "," << r.yf0 << "," << r.xf1
+        << "," << r.yf1 << "," << r.xf2 << "," << r.yf2 << "," << r.L << ","
+        << r.A << "," << r.P << "," << r.s01 << "," << r.s02 << "," << r.s12
+        << "\n";
   }
   return 0;
 }
