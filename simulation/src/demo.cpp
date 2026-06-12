@@ -1,5 +1,6 @@
 #include "config_array.hpp"
 #include "forces.hpp"
+#include "provenance.hpp"
 #include "vdp_ensemble.hpp"
 #include <CLI11.hpp>
 #include <fstream>
@@ -9,7 +10,8 @@
 #include <yaml-cpp/yaml.h>
 
 template <int N>
-int run(const YAML::Node &config, const std::string &output_path) {
+int run(const YAML::Node &config, const std::string &config_path,
+        const std::string &output_path) {
   const auto y0 = to_array<2 * N>(config["y0"].as<std::vector<double>>());
   const auto freqs = to_array<N>(config["freqs"].as<std::vector<double>>());
   const auto lambdas = to_array<N>(config["lambdas"].as<std::vector<double>>());
@@ -41,6 +43,7 @@ int run(const YAML::Node &config, const std::string &output_path) {
     return 1;
   }
 
+  provenance::write_header(out, "vdp_sim", config_path, config);
   out << "t";
   for (int i = 0; i < N; ++i)
     out << ",x" << i << ",y" << i;
@@ -70,21 +73,21 @@ int main(int argc, char **argv) {
   const int N = config["N"].as<int>();
   switch (N) {
   case 1:
-    return run<1>(config, output_path);
+    return run<1>(config, config_path, output_path);
   case 2:
-    return run<2>(config, output_path);
+    return run<2>(config, config_path, output_path);
   case 3:
-    return run<3>(config, output_path);
+    return run<3>(config, config_path, output_path);
   case 4:
-    return run<4>(config, output_path);
+    return run<4>(config, config_path, output_path);
   case 5:
-    return run<5>(config, output_path);
+    return run<5>(config, config_path, output_path);
   case 6:
-    return run<6>(config, output_path);
+    return run<6>(config, config_path, output_path);
   case 7:
-    return run<7>(config, output_path);
+    return run<7>(config, config_path, output_path);
   case 8:
-    return run<8>(config, output_path);
+    return run<8>(config, config_path, output_path);
   default:
     std::cerr << "demo supports N in 1..8 (got " << N << ")\n";
     return 1;

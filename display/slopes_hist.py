@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 
 def plot_hist(csv_file: str):
-    df = pd.read_csv(csv_file)
+    df = pd.read_csv(csv_file, comment='#')
     slopes = pd.concat([df["s01"], df["s02"], df["s12"]], ignore_index=True)
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 4))

@@ -2,12 +2,15 @@
 #include "forces.hpp"
 #include "goals.hpp"
 #include "phase_diff_slopes.hpp"
+#include "provenance.hpp"
 #include "vdp_ensemble.hpp"
 #include <CLI11.hpp>
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -18,7 +21,8 @@ struct PhaseSlopesResult {
 };
 
 template <int N>
-int run(const YAML::Node &config, const std::string &output_path) {
+int run(const YAML::Node &config, const std::string &config_path,
+        const std::string &output_path) {
   const auto y0 = to_array<2 * N>(config["y0"].as<std::vector<double>>());
   const auto lambdas = to_array<N>(config["lambdas"].as<std::vector<double>>());
   const auto adj = to_adj<N>(config["adj"].as<std::vector<std::vector<int>>>());
@@ -39,6 +43,8 @@ int run(const YAML::Node &config, const std::string &output_path) {
     std::cerr << "Got an error opening output file";
     return 1;
   }
+  provenance::write_header(out, "vdp_phase_slopes", config_path, config);
+  out << std::setprecision(std::numeric_limits<double>::max_digits10);
   out << "delta1,delta2,eps,L,s01,s02,s12\n";
 
   std::vector<PhaseSlopesResult> results(n_tasks);
@@ -106,7 +112,7 @@ int main(int argc, char **argv) {
   const int N = config["N"].as<int>();
   switch (N) {
   case 3:
-    return run<3>(config, output_path);
+    return run<3>(config, config_path, output_path);
   default:
     std::cerr << "phase_slopes supports only N=3 (got " << N << ")\n";
     return 1;

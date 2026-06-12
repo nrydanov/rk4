@@ -10,7 +10,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
 def plot_heatmaps(csv_file: str):
-    df = pd.read_csv(csv_file).replace('nan', np.nan)
+    df = pd.read_csv(csv_file, comment='#').replace('nan', np.nan)
     eps_values = sorted(df['eps'].dropna().unique())
     n = len(eps_values)
 

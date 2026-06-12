@@ -3,6 +3,7 @@
 #include "forces.hpp"
 #include "goals.hpp"
 #include "phase_diff_slopes.hpp"
+#include "provenance.hpp"
 #include "vdp_ensemble.hpp"
 #include <CLI11.hpp>
 #include <array>
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <omp.h>
 #include <optional>
 #include <random>
@@ -169,7 +171,8 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
 }
 
 template <int N>
-int run(const YAML::Node &yaml, const std::string &output_path) {
+int run(const YAML::Node &yaml, const std::string &config_path,
+        const std::string &output_path) {
   const auto &s = yaml["sim"];
   double d_min = s["d_min"].as<double>();
   double d_max = s["d_max"].as<double>();
@@ -205,6 +208,10 @@ int run(const YAML::Node &yaml, const std::string &output_path) {
     std::cerr << "Failed to open output file\n";
     return 1;
   }
+  provenance::write_header(out, "vdp_multistability", config_path, yaml);
+  // max_digits10 — чтобы по записанным НУ можно было в точности повторить
+  // отдельную траекторию
+  out << std::setprecision(std::numeric_limits<double>::max_digits10);
   out << "delta1,delta2,eps,coupling_type,x0,y0,x1,y1,x2,y2,L,A,P,s01,s02,"
          "s12\n";
   for (auto &r : results) {
@@ -228,7 +235,7 @@ int main(int argc, char **argv) {
   const int N = yaml["N"].as<int>();
   switch (N) {
   case 3:
-    return run<3>(yaml, output_path);
+    return run<3>(yaml, config_path, output_path);
   default:
     std::cerr << "multistability supports only N=3 (got " << N << ")\n";
     return 1;

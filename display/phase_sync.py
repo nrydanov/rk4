@@ -92,7 +92,7 @@ def main():
     parser.add_argument("--show", action="store_true", help="Открыть интерактивное окно")
     args = parser.parse_args()
 
-    df = pd.read_csv(args.file).replace("nan", np.nan).dropna()
+    df = pd.read_csv(args.file, comment="#").replace("nan", np.nan).dropna()
     eps_values = sorted(df["eps"].unique())
     vmin, vmax = df["L"].min(), df["L"].max()
 

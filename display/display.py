@@ -11,7 +11,7 @@ args = parser.parse_args()
 
 filename = args.file
 try:
-    data = pd.read_csv(filename)
+    data = pd.read_csv(filename, comment='#')
 except FileNotFoundError:
     print(f"Error: File {filename} not found.")
     sys.exit(1)
