@@ -12,6 +12,7 @@ set(MAIN_SIM src/demo.cpp)
 set(MAIN_SYNC_ENERGY experiments/sync_energy/main.cpp)
 set(MAIN_PHASE_SLOPES experiments/phase_slopes/main.cpp)
 set(MAIN_MULTISTABILITY experiments/multistability/main.cpp)
+set(MAIN_VALIDATION experiments/validation/main.cpp)
 
 add_library(vdp_core INTERFACE)
 
@@ -60,6 +61,12 @@ target_link_libraries(vdp_multistability PRIVATE
     OpenMP::OpenMP_CXX
 )
 
+# Validation suite (analytical checks: limit cycle, RK4 order, Adler tongue)
+add_executable(vdp_validation ${MAIN_VALIDATION})
+target_link_libraries(vdp_validation PRIVATE
+    vdp_core
+)
+
 if(MSVC)
     target_compile_options(vdp_sim             PRIVATE /W4)
     target_compile_options(vdp_sync_energy     PRIVATE /W4)
@@ -70,8 +77,10 @@ else()
     target_compile_options(vdp_sync_energy     PRIVATE -Wall -Wextra)
     target_compile_options(vdp_phase_slopes    PRIVATE -Wall -Wextra)
     target_compile_options(vdp_multistability  PRIVATE -Wall -Wextra)
+    target_compile_options(vdp_validation      PRIVATE -Wall -Wextra)
     target_compile_options(vdp_sim             PRIVATE $<$<CONFIG:Release>:-O3 -march=native -DNDEBUG -fno-math-errno -funroll-loops>)
     target_compile_options(vdp_sync_energy     PRIVATE $<$<CONFIG:Release>:-O3 -march=native -DNDEBUG -fno-math-errno -funroll-loops>)
     target_compile_options(vdp_phase_slopes    PRIVATE $<$<CONFIG:Release>:-O3 -march=native -DNDEBUG -fno-math-errno -funroll-loops>)
     target_compile_options(vdp_multistability  PRIVATE $<$<CONFIG:Release>:-O3 -march=native -DNDEBUG -fno-math-errno -funroll-loops>)
+    target_compile_options(vdp_validation      PRIVATE $<$<CONFIG:Release>:-O3 -march=native -DNDEBUG -fno-math-errno -funroll-loops>)
 endif()

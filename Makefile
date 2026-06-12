@@ -5,7 +5,7 @@ DISPLAY_DIR = display
 RESULTS = results.csv
 CONFIG = config.yaml
 
-.PHONY: demo run build plot clean sync_energy phase_slopes multistability
+.PHONY: demo run build plot clean sync_energy phase_slopes multistability validation
 
 # Быстрая демонстрация: сборка + базовая симуляция + просмотр траекторий и фазовых портретов
 demo: release run-demo plot-demo
@@ -21,6 +21,12 @@ phase_slopes: release run-phase-slopes plot-phase-slopes
 
 # Эксперимент: мультистабильность — 4 варианта связи, случайные начальные условия
 multistability: release run-multistability
+
+# Валидация пайплайна против аналитики: амплитуда/частота ВдП, порядок RK4,
+# полная синхронизация идентичной пары, скейлинг языка Адлера, симметрия звезды
+validation: release
+	@echo "--- Running validation suite ---"
+	./$(BUILD_DIR)/vdp_validation
 
 # Запуск базовой симуляции (одна траектория)
 run-demo:
