@@ -1,7 +1,7 @@
 N: 1
 y0: [2.0, 0.0]
 freqs: [1.0]
-lambdas: [0.1]
+mus: [0.1]
 coupling: [0]
 adj:
   - [0]

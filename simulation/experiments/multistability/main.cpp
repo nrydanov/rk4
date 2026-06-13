@@ -22,22 +22,26 @@
 #include <yaml-cpp/yaml.h>
 
 template <int N> struct Config {
-  std::array<double, N> lambdas;
-  std::array<std::array<int, N>, N> adj;
-  double T, dt, d_min, d_step, t_trans;
-  std::vector<double> epsilons;
-  int grid_size;
-  int n_ic;
-  double ic_range;
-  uint32_t seed;
+  std::array<double, N> mus;             // параметр нелинейного затухания (μ)
+  std::array<std::array<int, N>, N> adj; // матрица смежности
+  double T;                              // полное время интегрирования
+  double dt;                             // шаг интегрирования
+  double d_min;                          // минимальная расстройка частоты
+  double d_step;                         // шаг сетки расстроек
+  double t_trans;                        // время переходного процесса
+  std::vector<double> epsilons;          // значения силы связи
+  int grid_size;                         // число точек по каждой оси (delta)
+  int n_ic;                              // число случайных начальных условий
+  double ic_range;                       // начальные условия из [-ic_range, ic_range]
+  uint32_t seed;                         // seed генератора начальных условий
 };
 
 struct Result {
-  double delta1, delta2, eps;
-  int coupling_type;
+  double delta1, delta2, eps; // параметры системы
+  int coupling_type; // тип связи
   double x0, y0, x1, y1, x2, y2;       // начальные условия
   double xf0, yf0, xf1, yf1, xf2, yf2; // конечное состояние
-  double L, A, P;
+  double L, A, P; // значения рассматриваемых целевых функций
   double s01, s02, s12;
 };
 
@@ -62,11 +66,21 @@ void print_progress(size_t done, size_t total,
   std::cerr << "   " << std::flush;
 }
 
-template <int N, class CouplingFunc>
+void write_result(std::ostream &out, const Result &r) {
+  out << r.delta1 << "," << r.delta2 << "," << r.eps << "," << r.coupling_type
+      << "," << r.x0 << "," << r.y0 << "," << r.x1 << "," << r.y1 << "," << r.x2
+      << "," << r.y2 << "," << r.xf0 << "," << r.yf0 << "," << r.xf1 << ","
+      << r.yf1 << "," << r.xf2 << "," << r.yf2 << "," << r.L << "," << r.A
+      << "," << r.P << "," << r.s01 << "," << r.s02 << "," << r.s12 << "\n";
+}
+
+template <int N, class CouplingFunc, class Sink>
 void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
-           std::vector<Result> &out) {
+           Sink &&sink) {
   const size_t n_tasks =
       (size_t)cfg.grid_size * cfg.grid_size * cfg.epsilons.size() * cfg.n_ic;
+  const long n_trans = std::lround(cfg.t_trans / cfg.dt);
+  const long n_meas = std::lround((cfg.T - cfg.t_trans) / cfg.dt);
   std::vector<Result> local(n_tasks);
   std::atomic<size_t> progress{0};
   const size_t report_every = std::max((size_t)1, n_tasks / 50);
@@ -79,16 +93,19 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
         const size_t base = (e * (size_t)cfg.grid_size * cfg.grid_size +
                              i1 * cfg.grid_size + i2) *
                             cfg.n_ic;
+        // Расстройка первого осциллятора
         const double delta1 = cfg.d_min + i1 * cfg.d_step;
+        // Расстройка второго осциллятора
         const double delta2 = cfg.d_min + i2 * cfg.d_step;
 
+        // TODO(nrydanov): это не работает для N отличных от трех, нужно придумать как генерализировать
         std::array<double, N> freqs{1.0, 1.0 + delta1, 1.0 + delta2};
         std::array<double, N> eps_coupling;
         eps_coupling.fill(cfg.epsilons[e]);
 
-        std::mt19937 rng(cfg.seed ^
-                         std::hash<size_t>{}(e * cfg.grid_size * cfg.grid_size +
-                                             i1 * cfg.grid_size + i2));
+        std::seed_seq seq{cfg.seed, static_cast<uint32_t>(i1),
+                          static_cast<uint32_t>(i2)};
+        std::mt19937 rng(seq);
         std::uniform_real_distribution<double> dist(-cfg.ic_range,
                                                     cfg.ic_range);
 
@@ -106,12 +123,12 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
             v = dist(rng);
 
           if (!solver)
-            solver.emplace(y0, freqs, cfg.lambdas, eps_coupling, cfg.adj,
+            solver.emplace(y0, freqs, cfg.mus, eps_coupling, cfg.adj,
                            forces::NoopForce{});
           else
             solver->reset(y0, freqs, eps_coupling);
 
-          for (double t = 0.0; t < cfg.t_trans; t += cfg.dt)
+          for (long k = 0; k < n_trans; ++k)
             solver->step(cfg.dt);
 
           if (!pds)
@@ -122,24 +139,21 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
             phase_goal.emplace(2, N);
 
           double L_acc = 0.0, A_acc = 0.0, P_acc = 0.0;
-          int steps = 0;
-          for (double t = cfg.t_trans; t < cfg.T; t += cfg.dt, ++steps) {
+          for (long k = 0; k < n_meas; ++k) {
             solver->step(cfg.dt);
+            const double t = (n_trans + k + 1) * cfg.dt;
             const auto &state = solver->getState();
             std::array<double, N> raw_phase;
             for (int i = 0; i < N; ++i)
               raw_phase[i] = std::atan2(state[2 * i + 1], state[2 * i]);
             pds->push_raw(t, raw_phase.data());
-            double sum_x = 0.0;
-            for (int i = 0; i < N; ++i)
-              sum_x += state[2 * i];
-            L_acc += sum_x * sum_x;
+            L_acc += goals::coherence(state.data(), N);
             A_acc += ampl_goal(state.data());
             P_acc += phase_goal->from_raw_phases(raw_phase.data());
           }
-          double L = 2.0 / (cfg.T - cfg.t_trans) * L_acc * cfg.dt;
-          double A = A_acc / steps;
-          double P = P_acc / steps;
+          double L = 2.0 * L_acc / n_meas;
+          double A = A_acc / n_meas;
+          double P = P_acc / n_meas;
 
           const auto &yf = solver->getState();
           local[base + ic] = {delta1,
@@ -175,7 +189,8 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
 
   print_progress(n_tasks, n_tasks, start, label);
   std::cerr << "\n";
-  out.insert(out.end(), local.begin(), local.end());
+  for (const auto &r : local)
+    sink(r);
 }
 
 template <int N>
@@ -187,7 +202,7 @@ int run(const YAML::Node &yaml, const std::string &config_path,
   double d_step = s["d_step"].as<double>();
 
   Config<N> cfg{
-      .lambdas = to_array<N>(yaml["lambdas"].as<std::vector<double>>()),
+      .mus = to_array<N>(yaml["mus"].as<std::vector<double>>()),
       .adj = to_adj<N>(yaml["adj"].as<std::vector<std::vector<int>>>()),
       .T = s["T"].as<double>(),
       .dt = s["dt"].as<double>(),
@@ -195,7 +210,8 @@ int run(const YAML::Node &yaml, const std::string &config_path,
       .d_step = d_step,
       .t_trans = s["t_transition"].as<double>(),
       .epsilons = s["epsilons"].as<std::vector<double>>(),
-      .grid_size = static_cast<int>(std::abs(d_max - d_min) / d_step + 1),
+      .grid_size =
+          static_cast<int>(std::lround(std::abs(d_max - d_min) / d_step) + 1),
       .n_ic = s["n_ic"].as<int>(),
       .ic_range = s["ic_range"].as<double>(),
       .seed = s["seed"].as<uint32_t>(),
@@ -205,31 +221,21 @@ int run(const YAML::Node &yaml, const std::string &config_path,
             << "  epsilons: " << cfg.epsilons.size() << "  n_ic: " << cfg.n_ic
             << "  OpenMP threads: " << omp_get_max_threads() << "\n";
 
-  std::vector<Result> results;
-  sweep<N, coupling::Inertial>(0, "Inertial        ", cfg, results);
-  sweep<N, coupling::InertialNorm>(1, "InertialNorm    ", cfg, results);
-  sweep<N, coupling::Dissipative>(2, "Dissipative     ", cfg, results);
-  sweep<N, coupling::DissipativeNorm>(3, "DissipativeNorm ", cfg, results);
-
   std::ofstream out(output_path);
   if (!out.is_open()) {
     std::cerr << "Failed to open output file\n";
     return 1;
   }
   provenance::write_header(out, "vdp_multistability", config_path, yaml);
-  // max_digits10 — чтобы по записанным НУ можно было в точности повторить
-  // отдельную траекторию
   out << std::setprecision(std::numeric_limits<double>::max_digits10);
   out << "delta1,delta2,eps,coupling_type,x0,y0,x1,y1,x2,y2,"
          "xf0,yf0,xf1,yf1,xf2,yf2,L,A,P,s01,s02,s12\n";
-  for (auto &r : results) {
-    out << r.delta1 << "," << r.delta2 << "," << r.eps << "," << r.coupling_type
-        << "," << r.x0 << "," << r.y0 << "," << r.x1 << "," << r.y1 << ","
-        << r.x2 << "," << r.y2 << "," << r.xf0 << "," << r.yf0 << "," << r.xf1
-        << "," << r.yf1 << "," << r.xf2 << "," << r.yf2 << "," << r.L << ","
-        << r.A << "," << r.P << "," << r.s01 << "," << r.s02 << "," << r.s12
-        << "\n";
-  }
+
+  auto sink = [&out](const Result &r) { write_result(out, r); };
+  sweep<N, coupling::Inertial>(0, "Inertial        ", cfg, sink);
+  sweep<N, coupling::InertialNorm>(1, "InertialNorm    ", cfg, sink);
+  sweep<N, coupling::Dissipative>(2, "Dissipative     ", cfg, sink);
+  sweep<N, coupling::DissipativeNorm>(3, "DissipativeNorm ", cfg, sink);
   return 0;
 }
 

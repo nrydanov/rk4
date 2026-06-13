@@ -2,9 +2,6 @@
 #include <array>
 #include <cstddef>
 
-// CRTP RK4-интегратор. Dim известен на этапе компиляции => состояние и рабочие
-// буферы лежат в std::array (стек, ноль heap), циклы разворачиваются, derivs()
-// инлайнится из производного класса вместо виртуального вызова.
 template <typename Derived, std::size_t Dim>
 class RK4Solver {
 public:

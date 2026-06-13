@@ -3,9 +3,6 @@
 #include <cstddef>
 #include <vector>
 
-// Конвертация распарсенных из YAML векторов в std::array фиксированного размера
-// для compile-time-N солвера.
-
 template <std::size_t M>
 std::array<double, M> to_array(const std::vector<double> &v) {
   std::array<double, M> a{};

@@ -23,7 +23,7 @@ template <int N>
 int run(const YAML::Node &config, const std::string &config_path,
         const std::string &output_path) {
   const auto y0 = to_array<2 * N>(config["y0"].as<std::vector<double>>());
-  const auto lambdas = to_array<N>(config["lambdas"].as<std::vector<double>>());
+  const auto mus = to_array<N>(config["mus"].as<std::vector<double>>());
   const auto adj = to_adj<N>(config["adj"].as<std::vector<std::vector<int>>>());
 
   const auto s = config["sim"];
@@ -34,8 +34,13 @@ int run(const YAML::Node &config, const std::string &config_path,
   const double d_max = s["d_max"].as<double>();
   const double t_trans = s["t_transition"].as<double>();
   const auto epsilons = s["epsilons"].as<std::vector<double>>();
-  const int grid_size = static_cast<int>(std::abs(d_max - d_min) / d_step + 1);
+  const int grid_size =
+      static_cast<int>(std::lround(std::abs(d_max - d_min) / d_step) + 1);
   const size_t n_tasks = (size_t)grid_size * grid_size * epsilons.size();
+  // Целое число шагов вместо накопления t += dt: детерминированный счёт и
+  // точная нормировка метрик на реально проинтегрированное время.
+  const long n_trans = std::lround(t_trans / dt);
+  const long n_meas = std::lround((T - t_trans) / dt);
 
   std::ofstream out(output_path);
   if (!out.is_open()) {
@@ -65,19 +70,19 @@ int run(const YAML::Node &config, const std::string &config_path,
         using Solver = vdp_ensemble::VdPEnsembleSolver<N>;
         thread_local std::optional<Solver> solver;
         if (!solver)
-          solver.emplace(y0, freqs, lambdas, eps_coupling, adj,
+          solver.emplace(y0, freqs, mus, eps_coupling, adj,
                          forces::NoopForce{});
         else
           solver->reset(y0, freqs, eps_coupling);
 
-        for (double t = 0.0; t < t_trans; t += dt)
+        for (long k = 0; k < n_trans; ++k)
           solver->step(dt);
         double L_acc = 0.0;
-        for (double t = t_trans; t < T; t += dt) {
+        for (long k = 0; k < n_meas; ++k) {
           solver->step(dt);
           L_acc += goals::coherence(solver->getState().data(), N);
         }
-        const double L = 2.0 / (T - t_trans) * L_acc * dt;
+        const double L = 2.0 * L_acc / n_meas;
         results[idx] = {delta1, delta2, eps, L};
       }
     }

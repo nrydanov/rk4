@@ -71,8 +71,6 @@ struct phase_t {
     return from_phases();
   }
 
-  // То же, но на вход подаются уже вычисленные фазы raw[i] = atan2(y_i, x_i) —
-  // чтобы не считать atan2 повторно.
   Real from_raw_phases(const Real *raw) {
     for (Index i = 0; i < nods; ++i) {
       phi[i] = raw[i];
@@ -82,7 +80,6 @@ struct phase_t {
 
 private:
 
-  // Агрегирует попарные разности фаз из phi[] в метрику когерентности.
   Real from_phases() const {
     Real Phi = Real(0);
     for (Index i = 0; i < nods1; ++i) {
@@ -109,20 +106,17 @@ const std::string phase_t<Real, Index>::name = "phase_t";
 
 namespace goals {
 
-// L = (x0 + x1 + ... + x_{N-1})^2 — мгновенное значение
 inline double coherence(const double *state, int N) {
   double sum = 0.0;
   for (int i = 0; i < N; ++i) sum += state[2 * i];
   return sum * sum;
 }
 
-// ampl_t — мгновенное значение
 inline double ampl(const double *state, int N) {
   ampl_t<double, int> goal(2, N);
   return goal(state);
 }
 
-// phase_t — мгновенное значение
 inline double phase_coherence(const double *state, int N) {
   phase_t<double, int> goal(2, N);
   return goal(state);

@@ -2,10 +2,11 @@
 SIM_DIR = simulation
 BUILD_DIR = $(SIM_DIR)/build
 DISPLAY_DIR = display
-RESULTS = results.csv
+RESULTS     = results.csv
+RESULTS_PQ  = results.parquet
 CONFIG = config.yaml
 
-.PHONY: demo run build plot clean sync_energy phase_slopes multistability validation
+.PHONY: demo run build plot clean sync_energy phase_slopes multistability validation to-parquet
 
 # Быстрая демонстрация: сборка + базовая симуляция + просмотр траекторий и фазовых портретов
 demo: release run-demo plot-demo
@@ -14,13 +15,13 @@ demo: release run-demo plot-demo
 save: release run-demo save-demo
 
 # Эксперимент: карта когерентности на плоскости (δ1, δ2) для набора ε
-sync_energy: release run-sync-energy plot-heatmap
+sync_energy: release run-sync-energy to-parquet plot-heatmap
 
 # Эксперимент: карта когерентности + режимы фазовой синхронизации на плоскости (δ1, δ2)
-phase_slopes: release run-phase-slopes plot-phase-slopes
+phase_slopes: release run-phase-slopes to-parquet plot-phase-slopes
 
 # Эксперимент: мультистабильность — 4 варианта связи, случайные начальные условия
-multistability: release run-multistability
+multistability: release run-multistability to-parquet
 
 # Валидация пайплайна против аналитики: амплитуда/частота ВдП, порядок RK4,
 # полная синхронизация идентичной пары, скейлинг языка Адлера, симметрия звезды
@@ -48,6 +49,15 @@ run-phase-slopes:
 run-multistability:
 	@echo "--- Running multistability experiment ---"
 	OMP_PROC_BIND=close OMP_PLACES=cores ./$(BUILD_DIR)/vdp_multistability $(SIM_DIR)/experiments/multistability/$(CONFIG) -o ./$(RESULTS)
+
+# Конвертация results.csv → results.parquet (zstd, без потери точности)
+to-parquet:
+	@echo "--- Converting $(RESULTS) → $(RESULTS_PQ) ---"
+	cd $(DISPLAY_DIR) && uv run python -c "\
+import pandas as pd; \
+df = pd.read_csv('../$(RESULTS)', comment='#'); \
+df.to_parquet('../$(RESULTS_PQ)', compression='zstd', index=False); \
+print(f'  {len(df):,} rows → $(RESULTS_PQ)')"
 
 # Отрисовка траекторий и фазовых портретов с открытием окна
 plot-demo:
@@ -87,7 +97,7 @@ debug:
 
 # Удаление результатов, картинок и артефактов сборки
 clean:
-	rm -f $(RESULTS)
+	rm -f $(RESULTS) $(RESULTS_PQ)
 	rm -f *.png
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned up results and plots."

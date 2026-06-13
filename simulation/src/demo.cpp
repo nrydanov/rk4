@@ -14,7 +14,7 @@ int run(const YAML::Node &config, const std::string &config_path,
         const std::string &output_path) {
   const auto y0 = to_array<2 * N>(config["y0"].as<std::vector<double>>());
   const auto freqs = to_array<N>(config["freqs"].as<std::vector<double>>());
-  const auto lambdas = to_array<N>(config["lambdas"].as<std::vector<double>>());
+  const auto mus = to_array<N>(config["mus"].as<std::vector<double>>());
   const auto coupling =
       to_array<N>(config["coupling"].as<std::vector<double>>());
   const auto adj = to_adj<N>(config["adj"].as<std::vector<std::vector<int>>>());
@@ -35,7 +35,7 @@ int run(const YAML::Node &config, const std::string &config_path,
   }
 
   vdp_ensemble::VdPEnsembleSolver<N, forces::SinForce> solver(
-      y0, freqs, lambdas, coupling, adj, opt_force.value());
+      y0, freqs, mus, coupling, adj, opt_force.value());
 
   std::ofstream out(output_path);
   if (!out.is_open()) {

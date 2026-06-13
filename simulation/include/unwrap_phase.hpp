@@ -17,8 +17,6 @@ template <typename Real> struct unwrap_phase {
 
   Real operator()(Real xx, Real yy) { return push_raw(std::atan2(yy, xx)); }
 
-  // Разворачивает уже вычисленную сырую фазу raw_phi = atan2(yy, xx). Позволяет
-  // переиспользовать atan2, посчитанный один раз на стороне вызова.
   Real push_raw(Real raw_phi) {
     if (first) {
       phi = prev_raw_phi = raw_phi;

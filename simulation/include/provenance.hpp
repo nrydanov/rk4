@@ -6,9 +6,6 @@
 #include <string>
 #include <yaml-cpp/yaml.h>
 
-// Провенанс-заголовок CSV: строки вида `# key: value` перед шапкой колонок.
-// pandas читает такие файлы через pd.read_csv(..., comment='#').
-
 namespace provenance {
 
 inline std::string run_cmd(const char *cmd) {
@@ -23,9 +20,6 @@ inline std::string run_cmd(const char *cmd) {
   return out;
 }
 
-// Хэш коммита снимается в рантайме из текущей директории процесса — фиксирует
-// состояние репозитория на момент запуска, а не сборки. Если рабочая копия
-// грязная, добавляется суффикс -dirty: результат нельзя привязать к коммиту.
 inline std::string git_describe() {
   std::string hash = run_cmd("git rev-parse --short HEAD 2>/dev/null");
   if (hash.empty()) return "unknown";
@@ -40,9 +34,6 @@ inline std::string timestamp_utc() {
   return buf;
 }
 
-// Пишет в начало CSV: имя инструмента, время запуска, коммит и полный дамп
-// конфига — чтобы по файлу данных можно было восстановить, чем и из чего он
-// посчитан, без обращения к внешним файлам.
 inline void write_header(std::ostream &out, const std::string &tool,
                          const std::string &config_path,
                          const YAML::Node &config) {

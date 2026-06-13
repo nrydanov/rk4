@@ -258,5 +258,6 @@ pyrightconfig.json
 
 *.png
 *.csv
+*.parquet
 tasks
 articles

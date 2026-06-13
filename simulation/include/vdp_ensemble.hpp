@@ -6,10 +6,6 @@
 
 namespace vdp_ensemble {
 
-// Ансамбль из N связанных осцилляторов Ван дер Поля. N фиксирован на этапе
-// компиляции (по умолчанию 3): всё состояние и параметры — std::array внутри
-// объекта, без heap. Для произвольного N — статическая инстанциация по нужным
-// значениям с динамической диспетчеризацией на стороне вызова.
 template <int N = 3, class ForceFunc = forces::NoopForce,
           class CouplingFunc = coupling::Inertial>
 class VdPEnsembleSolver
@@ -21,10 +17,10 @@ public:
   using Params = std::array<double, N>;
   using Adj = std::array<std::array<int, N>, N>;
 
-  VdPEnsembleSolver(const State &y0, const Params &freqs, const Params &lambda,
+  VdPEnsembleSolver(const State &y0, const Params &freqs, const Params &mu,
                     const Params &coupling, const Adj &adj, ForceFunc func,
                     CouplingFunc cf = {})
-      : lambda(lambda), coupling_coeff(coupling), adj(adj), forces(func),
+      : mu(mu), coupling_coeff(coupling), adj(adj), forces(func),
         coupling_func(cf) {
     this->y = y0;
     for (int i = 0; i < N; ++i) omega2[i] = freqs[i] * freqs[i];
@@ -38,7 +34,7 @@ public:
   }
 
 private:
-  Params omega2{}, lambda, coupling_coeff;
+  Params omega2{}, mu, coupling_coeff;
   Adj adj;
   ForceFunc forces;
   CouplingFunc coupling_func;
@@ -48,7 +44,7 @@ private:
     for (int i = 0; i < N; ++i) {
       const double xi = state[2 * i], yi = state[2 * i + 1];
       dydx[2 * i] = yi;
-      dydx[2 * i + 1] = (lambda[i] - xi * xi) * yi - omega2[i] * xi +
+      dydx[2 * i + 1] = (mu[i] - xi * xi) * yi - omega2[i] * xi +
                         coupling_coeff[i] * coupling_func(i, state, adj);
     }
     for (const auto &im : impacts)
