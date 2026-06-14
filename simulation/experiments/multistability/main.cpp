@@ -74,6 +74,9 @@ void write_result(std::ostream &out, const Result &r) {
       << "," << r.P << "," << r.s01 << "," << r.s02 << "," << r.s12 << "\n";
 }
 
+// Один полный прогон симуляции для конкретного типа связи
+// Sink намеренно шаблонный параметр-функтор, чтобы код работал не только
+// с std::ostream
 template <int N, class CouplingFunc, class Sink>
 void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
            Sink &&sink) {
@@ -81,8 +84,11 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
       (size_t)cfg.grid_size * cfg.grid_size * cfg.epsilons.size() * cfg.n_ic;
   const long n_trans = std::lround(cfg.t_trans / cfg.dt);
   const long n_meas = std::lround((cfg.T - cfg.t_trans) / cfg.dt);
-  std::vector<Result> local(n_tasks);
+  std::vector<Result> results(n_tasks);
+  // Счетчик текущего прогресса
   std::atomic<size_t> progress{0};
+  // Чтобы снизить падение производительности из-за постоянного вывода состояния,
+  // мы делаем это дискретно раз в промежуток времени
   const size_t report_every = std::max((size_t)1, n_tasks / 50);
   auto start = std::chrono::steady_clock::now();
 
@@ -103,6 +109,9 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
         std::array<double, N> eps_coupling;
         eps_coupling.fill(cfg.epsilons[e]);
 
+        // NOTE(nrydanov): я не уверен как лучше подбирать seed, чтобы
+        // эксперимент был статистически корректным, сейчас для каждой
+        // итерации используется свой, отдельным набор начальных условий
         std::seed_seq seq{cfg.seed, static_cast<uint32_t>(i1),
                           static_cast<uint32_t>(i2)};
         std::mt19937 rng(seq);
@@ -118,19 +127,25 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
 
         std::array<double, 2 * N> y0;
 
+        // Итетируемся по начальным условиям
         for (int ic = 0; ic < cfg.n_ic; ++ic) {
+          // Генерируем начальные условия и кладем их в y0
           for (auto &v : y0)
             v = dist(rng);
 
+          // Для экономии вычислений при первой итерации инициализируем solver,
+          // а в дальнейшем переиспользуем его повторно
           if (!solver)
             solver.emplace(y0, freqs, cfg.mus, eps_coupling, cfg.adj,
                            forces::NoopForce{});
           else
             solver->reset(y0, freqs, eps_coupling);
 
+          // Вхолостую проходим переходный период
           for (long k = 0; k < n_trans; ++k)
             solver->step(cfg.dt);
 
+          // Та же логика для pds для экономии вычислений
           if (!pds)
             pds.emplace(N, 2, 0, 1);
           else
@@ -139,6 +154,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
             phase_goal.emplace(2, N);
 
           double L_acc = 0.0, A_acc = 0.0, P_acc = 0.0;
+          // Итерируемся по окну, считаем метрики
           for (long k = 0; k < n_meas; ++k) {
             solver->step(cfg.dt);
             const double t = (n_trans + k + 1) * cfg.dt;
@@ -156,7 +172,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
           double P = P_acc / n_meas;
 
           const auto &yf = solver->getState();
-          local[base + ic] = {delta1,
+          results[base + ic] = {delta1,
                               delta2,
                               cfg.epsilons[e],
                               coupling_type_id,
@@ -189,7 +205,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
 
   print_progress(n_tasks, n_tasks, start, label);
   std::cerr << "\n";
-  for (const auto &r : local)
+  for (const auto &r : results)
     sink(r);
 }
 
@@ -226,6 +242,7 @@ int run(const YAML::Node &yaml, const std::string &config_path,
     std::cerr << "Failed to open output file\n";
     return 1;
   }
+  // Записываем параметры конфига в заголовок CSV для воспроизводимости
   provenance::write_header(out, "vdp_multistability", config_path, yaml);
   out << std::setprecision(std::numeric_limits<double>::max_digits10);
   out << "delta1,delta2,eps,coupling_type,x0,y0,x1,y1,x2,y2,"
