@@ -56,7 +56,7 @@ void print_progress(size_t done, size_t total,
                      .count();
   long eta = done > 0 ? (long)(elapsed * (double)(total - done) / done) : 0;
 
-  std::cerr << "\r" << label << " [";
+  std::cerr << "\r" << std::left << std::setw(16) << label << " [";
   for (int i = 0; i < bar_width; ++i)
     std::cerr << (i < filled ? '=' : (i == filled ? '>' : ' '));
   std::cerr << "] " << std::fixed << std::setprecision(1) << (frac * 100)
@@ -249,10 +249,10 @@ int run(const YAML::Node &yaml, const std::string &config_path,
          "xf0,yf0,xf1,yf1,xf2,yf2,L,A,P,s01,s02,s12\n";
 
   auto sink = [&out](const Result &r) { write_result(out, r); };
-  sweep<N, coupling::Inertial>(0, "Inertial        ", cfg, sink);
-  sweep<N, coupling::InertialNorm>(1, "InertialNorm    ", cfg, sink);
-  sweep<N, coupling::Dissipative>(2, "Dissipative     ", cfg, sink);
-  sweep<N, coupling::DissipativeNorm>(3, "DissipativeNorm ", cfg, sink);
+  sweep<N, coupling::Inertial>(0, "Inertial", cfg, sink);
+  sweep<N, coupling::InertialNorm>(1, "InertialNorm", cfg, sink);
+  sweep<N, coupling::Dissipative>(2, "Dissipative", cfg, sink);
+  sweep<N, coupling::DissipativeNorm>(3, "DissipativeNorm", cfg, sink);
   return 0;
 }
 

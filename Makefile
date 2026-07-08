@@ -2,8 +2,9 @@
 SIM_DIR = simulation
 BUILD_DIR = $(SIM_DIR)/build
 DISPLAY_DIR = display
-RESULTS     = results.csv
-RESULTS_PQ  = results.parquet
+OUT        ?= results
+RESULTS     = data/csv/$(OUT).csv
+RESULTS_PQ  = data/parquet/$(OUT).parquet
 CONFIG = config.yaml
 
 .PHONY: demo run build plot clean sync_energy phase_slopes multistability validation to-parquet
@@ -32,27 +33,32 @@ validation: release
 # Запуск базовой симуляции (одна траектория)
 run-demo:
 	@echo "--- Running simulation ---"
+	@mkdir -p data/csv
 	./$(BUILD_DIR)/vdp_sim $(SIM_DIR)/$(CONFIG) -o ./$(RESULTS)
 
 # Запуск эксперимента по когерентности: перебор (δ1, δ2, ε), результат — results.csv
 run-sync-energy:
 	@echo "--- Running sync energy experiment ---"
+	@mkdir -p data/csv
 	./$(BUILD_DIR)/vdp_sync_energy $(SIM_DIR)/experiments/sync_energy/$(CONFIG) -o ./$(RESULTS)
 
 # Запуск эксперимента по фазовым наклонам: перебор (δ1, δ2, ε), результат — results.csv
 run-phase-slopes:
 	@echo "--- Running phase slopes experiment ---"
+	@mkdir -p data/csv
 	./$(BUILD_DIR)/vdp_phase_slopes $(SIM_DIR)/experiments/phase_slopes/$(CONFIG) -o ./$(RESULTS)
 
 # Запуск эксперимента по мультистабильности: 4 варианта связи × случайные НУ
 # Привязка потоков к ядрам (close/cores) — стабильная кэш-локальность на x86/Linux
 run-multistability:
 	@echo "--- Running multistability experiment ---"
+	@mkdir -p data/csv
 	OMP_PROC_BIND=close OMP_PLACES=cores ./$(BUILD_DIR)/vdp_multistability $(SIM_DIR)/experiments/multistability/$(CONFIG) -o ./$(RESULTS)
 
 # Конвертация results.csv → results.parquet (zstd, без потери точности)
 to-parquet:
 	@echo "--- Converting $(RESULTS) → $(RESULTS_PQ) ---"
+	@mkdir -p data/parquet
 	cd $(DISPLAY_DIR) && uv run python -c "\
 import pandas as pd; \
 df = pd.read_csv('../$(RESULTS)', comment='#'); \
@@ -97,7 +103,7 @@ debug:
 
 # Удаление результатов, картинок и артефактов сборки
 clean:
-	rm -f $(RESULTS) $(RESULTS_PQ)
+	rm -rf data/
 	rm -f *.png
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned up results and plots."
