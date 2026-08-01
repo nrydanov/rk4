@@ -29,7 +29,13 @@ template <int N> struct Config {
   double d_min;                          // минимальная расстройка частоты
   double d_step;                         // шаг сетки расстроек
   double t_trans;                        // время переходного процесса
-  std::vector<double> epsilons;          // значения силы связи
+  // Значения силы связи задаются отдельно для инерционных и диссипативных
+  // вариантов: у диссипативной связи полуширина языка захвата примерно равна
+  // eps, у инерционной вчетверо меньше, а порог гашения (mu - eps*k_n = 0)
+  // существует только у диссипативной. Общий список одинаково плохо
+  // обслуживал бы оба.
+  std::vector<double> eps_inertial;
+  std::vector<double> eps_dissipative;
   int grid_size;                         // число точек по каждой оси (delta)
   int n_ic;                              // число случайных начальных условий
   double ic_range;                       // начальные условия из [-ic_range, ic_range]
@@ -79,9 +85,9 @@ void write_result(std::ostream &out, const Result &r) {
 // с std::ostream
 template <int N, class CouplingFunc, class Sink>
 void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
-           Sink &&sink) {
+           const std::vector<double> &epsilons, Sink &&sink) {
   const size_t n_tasks =
-      (size_t)cfg.grid_size * cfg.grid_size * cfg.epsilons.size() * cfg.n_ic;
+      (size_t)cfg.grid_size * cfg.grid_size * epsilons.size() * cfg.n_ic;
   const long n_trans = std::lround(cfg.t_trans / cfg.dt);
   const long n_meas = std::lround((cfg.T - cfg.t_trans) / cfg.dt);
   std::vector<Result> results(n_tasks);
@@ -93,7 +99,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
   auto start = std::chrono::steady_clock::now();
 
 #pragma omp parallel for schedule(static) collapse(3)
-  for (size_t e = 0; e < cfg.epsilons.size(); ++e) {
+  for (size_t e = 0; e < epsilons.size(); ++e) {
     for (int i1 = 0; i1 < cfg.grid_size; ++i1) {
       for (int i2 = 0; i2 < cfg.grid_size; ++i2) {
         const size_t base = (e * (size_t)cfg.grid_size * cfg.grid_size +
@@ -107,7 +113,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
         // TODO(nrydanov): это не работает для N отличных от трех, нужно придумать как генерализировать
         std::array<double, N> freqs{1.0, 1.0 + delta1, 1.0 + delta2};
         std::array<double, N> eps_coupling;
-        eps_coupling.fill(cfg.epsilons[e]);
+        eps_coupling.fill(epsilons[e]);
 
         // NOTE(nrydanov): я не уверен как лучше подбирать seed, чтобы
         // эксперимент был статистически корректным, сейчас для каждой
@@ -174,7 +180,7 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
           const auto &yf = solver->getState();
           results[base + ic] = {delta1,
                               delta2,
-                              cfg.epsilons[e],
+                              epsilons[e],
                               coupling_type_id,
                               y0[0],
                               y0[1],
@@ -225,7 +231,14 @@ int run(const YAML::Node &yaml, const std::string &config_path,
       .d_min = d_min,
       .d_step = d_step,
       .t_trans = s["t_transition"].as<double>(),
-      .epsilons = s["epsilons"].as<std::vector<double>>(),
+      // Ключ epsilons задаёт общий список для всех типов связи (так устроены
+      // прежние конфиги); epsilons_inertial и epsilons_dissipative задают их
+      // раздельно и имеют приоритет.
+      .eps_inertial = s[s["epsilons_inertial"] ? "epsilons_inertial" : "epsilons"]
+                          .as<std::vector<double>>(),
+      .eps_dissipative =
+          s[s["epsilons_dissipative"] ? "epsilons_dissipative" : "epsilons"]
+              .as<std::vector<double>>(),
       .grid_size =
           static_cast<int>(std::lround(std::abs(d_max - d_min) / d_step) + 1),
       .n_ic = s["n_ic"].as<int>(),
@@ -234,7 +247,9 @@ int run(const YAML::Node &yaml, const std::string &config_path,
   };
 
   std::cerr << "Grid: " << cfg.grid_size << "x" << cfg.grid_size
-            << "  epsilons: " << cfg.epsilons.size() << "  n_ic: " << cfg.n_ic
+            << "  epsilons: " << cfg.eps_inertial.size() << " inert / "
+            << cfg.eps_dissipative.size() << " diss"
+            << "  n_ic: " << cfg.n_ic
             << "  OpenMP threads: " << omp_get_max_threads() << "\n";
 
   std::ofstream out(output_path);
@@ -249,10 +264,11 @@ int run(const YAML::Node &yaml, const std::string &config_path,
          "xf0,yf0,xf1,yf1,xf2,yf2,L,A,P,s01,s02,s12\n";
 
   auto sink = [&out](const Result &r) { write_result(out, r); };
-  sweep<N, coupling::Inertial>(0, "Inertial", cfg, sink);
-  sweep<N, coupling::InertialNorm>(1, "InertialNorm", cfg, sink);
-  sweep<N, coupling::Dissipative>(2, "Dissipative", cfg, sink);
-  sweep<N, coupling::DissipativeNorm>(3, "DissipativeNorm", cfg, sink);
+  sweep<N, coupling::Inertial>(0, "Inertial", cfg, cfg.eps_inertial, sink);
+  sweep<N, coupling::InertialNorm>(1, "InertialNorm", cfg, cfg.eps_inertial, sink);
+  sweep<N, coupling::Dissipative>(2, "Dissipative", cfg, cfg.eps_dissipative, sink);
+  sweep<N, coupling::DissipativeNorm>(3, "DissipativeNorm", cfg, cfg.eps_dissipative,
+                                      sink);
   return 0;
 }
 
