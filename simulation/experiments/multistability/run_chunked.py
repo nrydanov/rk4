@@ -57,7 +57,9 @@ for k, (group, eps) in enumerate(chunks, 1):
     print(f"[{k}/{len(chunks)}] {name}: счёт...", flush=True)
     t0 = time.time()
     rc = subprocess.call(
-        f'"{binary}" "{cfg_chunk}" -o /dev/stdout | zstd -T0 -3 -q -o "{part}" -f',
+        # -12, а не -19: на 63 ядрах -19 выдаёт 4.4 МБ/с и становится узким
+        # местом (часы на прогон) ради выигрыша в 9% против -12.
+        f'"{binary}" "{cfg_chunk}" -o /dev/stdout | zstd -T0 -12 -q -o "{part}" -f',
         shell=True)
     if rc != 0:
         print(f"[{k}/{len(chunks)}] {name}: ОШИБКА, код {rc}; .part оставлен для разбора")

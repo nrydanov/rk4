@@ -322,7 +322,11 @@ int run(const YAML::Node &yaml, const std::string &config_path,
   }
   // Записываем параметры конфига в заголовок CSV для воспроизводимости
   provenance::write_header(out, "vdp_multistability", config_path, yaml);
-  out << std::setprecision(std::numeric_limits<double>::max_digits10);
+  // 9 значащих цифр вместо 17: остальное всё равно шум. У наклонов шумовой пол
+  // порядка 1e-6 (он задан длиной окна), L, A и P — средние по 13600 отсчётам,
+  // начальные условия воспроизводятся из seed. При этом 17 цифр сжимаются вдвое
+  // хуже: 140 Б на строку против 76, а выгрузка идёт сотнями миллионов строк.
+  out << std::setprecision(9);
   out << "delta1,delta2,eps,coupling_type,t_trans,x0,y0,x1,y1,x2,y2,"
          "xf0,yf0,xf1,yf1,xf2,yf2,L,A,P,s01,s02,s12\n";
 
