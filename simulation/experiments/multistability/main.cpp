@@ -24,11 +24,19 @@
 template <int N> struct Config {
   std::array<double, N> mus;             // параметр нелинейного затухания (μ)
   std::array<std::array<int, N>, N> adj; // матрица смежности
-  double T;                              // полное время интегрирования
   double dt;                             // шаг интегрирования
   double d_min;                          // минимальная расстройка частоты
   double d_step;                         // шаг сетки расстроек
-  double t_trans;                        // время переходного процесса
+  // Времена переходного процесса, при которых снимаются метрики. Траектория
+  // интегрируется один раз до самого позднего окна, а более ранние чекпойнты
+  // читаются по дороге: прогон с меньшим t_trans — это та же самая траектория,
+  // просто окно взято раньше. Отдельные запуски дали бы те же числа втридорога.
+  std::vector<double> t_trans_list;
+  // Длина окна наблюдения, общая для всех чекпойнтов. Фиксирована намеренно:
+  // от неё зависит порог theta = 2*pi/window и шумовой пол оценки наклонов,
+  // поэтому менять её вместе с t_trans значит менять две вещи разом и потерять
+  // возможность судить о сходимости по транзиенту.
+  double window;
   // Значения силы связи задаются отдельно для инерционных и диссипативных
   // вариантов: у диссипативной связи полуширина языка захвата примерно равна
   // eps, у инерционной вчетверо меньше, а порог гашения (mu - eps*k_n = 0)
@@ -45,6 +53,7 @@ template <int N> struct Config {
 struct Result {
   double delta1, delta2, eps; // параметры системы
   int coupling_type; // тип связи
+  double t_trans;    // чекпойнт, с которого началось окно наблюдения
   double x0, y0, x1, y1, x2, y2;       // начальные условия
   double xf0, yf0, xf1, yf1, xf2, yf2; // конечное состояние
   double L, A, P; // значения рассматриваемых целевых функций
@@ -74,6 +83,7 @@ void print_progress(size_t done, size_t total,
 
 void write_result(std::ostream &out, const Result &r) {
   out << r.delta1 << "," << r.delta2 << "," << r.eps << "," << r.coupling_type
+      << "," << r.t_trans
       << "," << r.x0 << "," << r.y0 << "," << r.x1 << "," << r.y1 << "," << r.x2
       << "," << r.y2 << "," << r.xf0 << "," << r.yf0 << "," << r.xf1 << ","
       << r.yf1 << "," << r.xf2 << "," << r.yf2 << "," << r.L << "," << r.A
@@ -88,9 +98,18 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
            const std::vector<double> &epsilons, Sink &&sink) {
   const size_t n_tasks =
       (size_t)cfg.grid_size * cfg.grid_size * epsilons.size() * cfg.n_ic;
-  const long n_trans = std::lround(cfg.t_trans / cfg.dt);
-  const long n_meas = std::lround((cfg.T - cfg.t_trans) / cfg.dt);
-  std::vector<Result> results(n_tasks);
+  const int n_cp = (int)cfg.t_trans_list.size();
+  const long n_win = std::lround(cfg.window / cfg.dt);
+  // Окно чекпойнта c — это выборки с номерами (cp_start[c], cp_start[c]+n_win].
+  // Нумерация с единицы, потому что метрика снимается после шага, а не до него.
+  std::vector<long> cp_start(n_cp);
+  long n_steps = 0, first_open = std::numeric_limits<long>::max();
+  for (int c = 0; c < n_cp; ++c) {
+    cp_start[c] = std::lround(cfg.t_trans_list[c] / cfg.dt);
+    n_steps = std::max(n_steps, cp_start[c] + n_win);
+    first_open = std::min(first_open, cp_start[c]);
+  }
+  std::vector<Result> results(n_tasks * n_cp);
   // Счетчик текущего прогресса
   std::atomic<size_t> progress{0};
   // Чтобы снизить падение производительности из-за постоянного вывода состояния,
@@ -127,9 +146,24 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
         using Solver =
             vdp_ensemble::VdPEnsembleSolver<N, forces::NoopForce, CouplingFunc>;
         thread_local std::optional<Solver> solver;
-        thread_local std::optional<phase_diff_slopes<double>> pds;
+        // По накопителю наклонов на чекпойнт: окна перекрываются, поэтому
+        // одновременно открытых бывает несколько. Всё остальное — состояние
+        // шага, оно общее.
+        thread_local std::vector<phase_diff_slopes<double>> pds;
         thread_local std::optional<phase_t<double, int>> phase_goal;
+        thread_local std::vector<double> L_acc, A_acc, P_acc;
+        thread_local std::vector<std::array<double, 2 * N>> yf_cp;
         ampl_t<double, int> ampl_goal(2, N);
+        if ((int)pds.size() != n_cp) {
+          pds.clear();
+          pds.reserve(n_cp);
+          for (int c = 0; c < n_cp; ++c)
+            pds.emplace_back(N, 2, 0, 1);
+          L_acc.resize(n_cp);
+          A_acc.resize(n_cp);
+          P_acc.resize(n_cp);
+          yf_cp.resize(n_cp);
+        }
 
         std::array<double, 2 * N> y0;
 
@@ -147,41 +181,48 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
           else
             solver->reset(y0, freqs, eps_coupling);
 
-          // Вхолостую проходим переходный период
-          for (long k = 0; k < n_trans; ++k)
-            solver->step(cfg.dt);
-
-          // Та же логика для pds для экономии вычислений
-          if (!pds)
-            pds.emplace(N, 2, 0, 1);
-          else
-            pds->reset();
           if (!phase_goal)
             phase_goal.emplace(2, N);
+          for (int c = 0; c < n_cp; ++c) {
+            pds[c].reset();
+            L_acc[c] = A_acc[c] = P_acc[c] = 0.0;
+          }
 
-          double L_acc = 0.0, A_acc = 0.0, P_acc = 0.0;
-          // Итерируемся по окну, считаем метрики
-          for (long k = 0; k < n_meas; ++k) {
+          for (long k = 1; k <= n_steps; ++k) {
             solver->step(cfg.dt);
-            const double t = (n_trans + k + 1) * cfg.dt;
+            // До первого чекпойнта считать нечего — идём вхолостую
+            if (k <= first_open)
+              continue;
+            const double t = k * cfg.dt;
             const auto &state = solver->getState();
+            // Метрики шага не зависят от чекпойнта, поэтому считаются один раз
+            // и раздаются всем открытым окнам
             std::array<double, N> raw_phase;
             for (int i = 0; i < N; ++i)
               raw_phase[i] = std::atan2(state[2 * i + 1], state[2 * i]);
-            pds->push_raw(t, raw_phase.data());
-            L_acc += goals::coherence(state.data(), N);
-            A_acc += ampl_goal(state.data());
-            P_acc += phase_goal->from_raw_phases(raw_phase.data());
+            const double L_k = goals::coherence(state.data(), N);
+            const double A_k = ampl_goal(state.data());
+            const double P_k = phase_goal->from_raw_phases(raw_phase.data());
+            for (int c = 0; c < n_cp; ++c) {
+              if (k <= cp_start[c] || k > cp_start[c] + n_win)
+                continue;
+              pds[c].push_raw(t, raw_phase.data());
+              L_acc[c] += L_k;
+              A_acc[c] += A_k;
+              P_acc[c] += P_k;
+              // Конечное состояние — то, на котором окно закрылось
+              if (k == cp_start[c] + n_win)
+                yf_cp[c] = state;
+            }
           }
-          double L = 2.0 * L_acc / n_meas;
-          double A = A_acc / n_meas;
-          double P = P_acc / n_meas;
 
-          const auto &yf = solver->getState();
-          results[base + ic] = {delta1,
+          for (int c = 0; c < n_cp; ++c) {
+            const auto &yf = yf_cp[c];
+            results[(base + ic) * n_cp + c] = {delta1,
                               delta2,
                               epsilons[e],
                               coupling_type_id,
+                              cfg.t_trans_list[c],
                               y0[0],
                               y0[1],
                               y0[2],
@@ -194,12 +235,13 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
                               yf[3],
                               yf[4],
                               yf[5],
-                              L,
-                              A,
-                              P,
-                              (*pds)(0, 1),
-                              (*pds)(0, 2),
-                              (*pds)(1, 2)};
+                              2.0 * L_acc[c] / n_win,
+                              A_acc[c] / n_win,
+                              P_acc[c] / n_win,
+                              pds[c](0, 1),
+                              pds[c](0, 2),
+                              pds[c](1, 2)};
+          }
 
           size_t done = progress.fetch_add(1, std::memory_order_relaxed) + 1;
           if (done % report_every == 0)
@@ -223,14 +265,31 @@ int run(const YAML::Node &yaml, const std::string &config_path,
   double d_max = s["d_max"].as<double>();
   double d_step = s["d_step"].as<double>();
 
+  // Ключи t_trans_list и window задают лестницу чекпойнтов при неизменном окне
+  // наблюдения; при их отсутствии работает прежняя пара t_transition и T, то
+  // есть один чекпойнт — так продолжают считаться старые конфиги.
+  std::vector<double> t_trans_list;
+  double window;
+  if (s["t_trans_list"]) {
+    t_trans_list = s["t_trans_list"].as<std::vector<double>>();
+    window = s["window"].as<double>();
+  } else {
+    t_trans_list = {s["t_transition"].as<double>()};
+    window = s["T"].as<double>() - t_trans_list[0];
+  }
+  if (window <= 0.0) {
+    std::cerr << "Observation window must be positive (got " << window << ")\n";
+    return 1;
+  }
+
   Config<N> cfg{
       .mus = to_array<N>(yaml["mus"].as<std::vector<double>>()),
       .adj = to_adj<N>(yaml["adj"].as<std::vector<std::vector<int>>>()),
-      .T = s["T"].as<double>(),
       .dt = s["dt"].as<double>(),
       .d_min = d_min,
       .d_step = d_step,
-      .t_trans = s["t_transition"].as<double>(),
+      .t_trans_list = t_trans_list,
+      .window = window,
       // Ключ epsilons задаёт общий список для всех типов связи (так устроены
       // прежние конфиги); epsilons_inertial и epsilons_dissipative задают их
       // раздельно и имеют приоритет.
@@ -251,6 +310,10 @@ int run(const YAML::Node &yaml, const std::string &config_path,
             << cfg.eps_dissipative.size() << " diss"
             << "  n_ic: " << cfg.n_ic
             << "  OpenMP threads: " << omp_get_max_threads() << "\n";
+  std::cerr << "Window: " << cfg.window << "  checkpoints t_trans:";
+  for (double t : cfg.t_trans_list)
+    std::cerr << " " << t;
+  std::cerr << "\n";
 
   std::ofstream out(output_path);
   if (!out.is_open()) {
@@ -260,7 +323,7 @@ int run(const YAML::Node &yaml, const std::string &config_path,
   // Записываем параметры конфига в заголовок CSV для воспроизводимости
   provenance::write_header(out, "vdp_multistability", config_path, yaml);
   out << std::setprecision(std::numeric_limits<double>::max_digits10);
-  out << "delta1,delta2,eps,coupling_type,x0,y0,x1,y1,x2,y2,"
+  out << "delta1,delta2,eps,coupling_type,t_trans,x0,y0,x1,y1,x2,y2,"
          "xf0,yf0,xf1,yf1,xf2,yf2,L,A,P,s01,s02,s12\n";
 
   auto sink = [&out](const Result &r) { write_result(out, r); };
