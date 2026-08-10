@@ -43,7 +43,6 @@ THETA = 2 * math.pi / WINDOW
 KEYS = "coupling_type, eps, t_trans, delta1, delta2"
 
 QUERY = """
-COPY (
   SELECT
     {keys},
     count(*) AS n,
@@ -60,10 +59,8 @@ COPY (
     median(s01) AS s01_med,
     median(s02) AS s02_med,
     median(s12) AS s12_med
-  FROM read_csv({src}, comment='#')
+  FROM read_csv('{src}', comment='#')
   GROUP BY {keys}
-  ORDER BY {keys}
-) TO '{dst}' (FORMAT CSV, HEADER)
 """
 
 
@@ -77,10 +74,24 @@ def main():
     # Временные файлы — рядом с выгрузкой: в корне счётной машины меньше двух
     # гигабайт, а сортировка под медиану может вылиться на диск.
     con.execute(f"SET temp_directory='{os.path.dirname(os.path.abspath(dst))}'")
-    src = "[" + ", ".join(f"'{s}'" for s in sources) + "]"
-    con.execute(QUERY.format(keys=KEYS, th=repr(THETA), src=src, dst=dst))
 
-    n = con.execute(f"SELECT count(*) FROM read_csv('{dst}')").fetchone()[0]
+    # По одному куску за раз, а не одним запросом по всей выгрузке: медиана
+    # требует держать ансамбль целиком, и на 328 млн строк запрос молча
+    # умирал. Группы не пересекают файлы — в каждом куске свой eps, — поэтому
+    # результат от разбиения не меняется.
+    for i, src in enumerate(sources, 1):
+        select = QUERY.format(keys=KEYS, th=repr(THETA), src=src)
+        # Таблица создаётся по первому же запросу, чтобы типы колонок брались
+        # из него, а не назначались вручную
+        con.execute(f"CREATE TABLE agg AS {select}" if i == 1
+                    else f"INSERT INTO agg {select}")
+        done = con.execute("SELECT count(*) FROM agg").fetchone()[0]
+        print(f"[{i}/{len(sources)}] {os.path.basename(src)}: "
+              f"всего {done:,} ячеек", flush=True)
+
+    con.execute(f"COPY (SELECT * FROM agg ORDER BY {KEYS}) "
+                f"TO '{dst}' (FORMAT CSV, HEADER)")
+    n = con.execute("SELECT count(*) FROM agg").fetchone()[0]
     size = os.path.getsize(dst) / 2 ** 20
     print(f"итого {n:,} строк, {size:.1f} МБ -> {dst}")
 
