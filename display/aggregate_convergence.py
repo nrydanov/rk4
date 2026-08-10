@@ -66,7 +66,9 @@ def read_chunk(path):
         table = pa.Table.from_batches(list(reader))
     finally:
         pipe.wait()
-    return {c: table.column(c).to_numpy(zero_copy_only=False) for c in COLS}
+    # Без zero_copy_only: в pyarrow 12 у ChunkedArray такого аргумента нет, а
+    # копия здесь всё равно неизбежна — колонка склеивается из батчей.
+    return {c: table.column(c).to_numpy() for c in COLS}
 
 
 def aggregate(col):
