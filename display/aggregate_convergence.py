@@ -4,7 +4,7 @@
 Выгрузка лестницы — сотни миллионов строк по 100 начальных условий на ячейку,
 и целиком в parquet она не помещается. Но для вопроса «с какого t_trans карта
 перестаёт меняться» сами траектории не нужны: нужна статистика ансамбля в
-ячейке. Здесь из каждого куска получается по одной строке на
+ячейке. Здесь из выгрузки получается по одной строке на
 (тип связи, eps, t_trans, delta1, delta2) — это в сто раз компактнее и читается
 в ноутбуке целиком.
 
@@ -18,23 +18,18 @@
 * P_spread = max - min по ансамблю — мера мультистабильности: если все
   начальные условия сходятся к одному режиму, разброс нулевой.
 
-Только numpy и pyarrow: на счётной машине pandas нет, а ставить его туда ради
-одной свёртки незачем. Группировка сделана сортировкой по целочисленному ключу,
-а медиана — разворотом в матрицу (ячейки, начальные условия), поэтому свёртка
-идёт векторно, без прохода по группам в питоне.
+Через DuckDB, а не через поток на питоне: связка zstdcat | grep | парсер
+разбирает CSV в один поток и упирается в него на 22 гигабайтах, тогда как
+DuckDB распаковывает, разбирает и группирует на всех ядрах сразу и не держит
+выгрузку в памяти целиком.
 
   ./aggregate_convergence.py <выход.csv> <кусок.csv.zst> [кусок2.csv.zst ...]
 """
 import math
 import os
-import subprocess
 import sys
 
-import numpy as np
-import pyarrow as pa
-import pyarrow.csv as pacsv
-
-BLOCK = 256 << 20  # порция чтения, байт
+import duckdb
 
 # Порог захвата. Он задан длиной окна наблюдения: наклон меньше 2*pi/window
 # неотличим от нуля, потому что за окно разность фаз не успевает набрать и
@@ -42,86 +37,34 @@ BLOCK = 256 << 20  # порция чтения, байт
 WINDOW = 1360.0
 THETA = 2 * math.pi / WINDOW
 
-# Читаются только те колонки, которые нужны свёртке. Начальные и конечные
-# состояния — это 12 колонок из 23, и без них поток вдвое легче.
-COLS = ["delta1", "delta2", "eps", "coupling_type", "t_trans",
-        "L", "A", "P", "s01", "s02", "s12"]
+# Ключ ячейки. Расстройки сравниваются как числа с плавающей точкой, но это
+# безопасно: во всей выгрузке они получены одним и тем же выражением
+# d_min + i*d_step, поэтому совпадают побитово.
+KEYS = "coupling_type, eps, t_trans, delta1, delta2"
 
-OUT_COLS = ["coupling_type", "eps", "t_trans", "delta1", "delta2", "n",
-            "cap01", "cap02", "cap12", "cap_any",
-            "L_med", "A_med", "P_med", "P_min", "P_max", "P_spread",
-            "s01_med", "s02_med", "s12_med"]
-
-
-def read_chunk(path):
-    """Кусок целиком в таблицу; zstd распаковывается на лету."""
-    cat = "zstdcat" if path.endswith(".zst") else "cat"
-    pipe = subprocess.Popen(f"{cat} {path!r} | grep -v '^#'",
-                            shell=True, stdout=subprocess.PIPE)
-    reader = pacsv.open_csv(
-        pipe.stdout,
-        read_options=pacsv.ReadOptions(block_size=BLOCK),
-        convert_options=pacsv.ConvertOptions(include_columns=COLS))
-    try:
-        table = pa.Table.from_batches(list(reader))
-    finally:
-        pipe.wait()
-    # Без zero_copy_only: в pyarrow 12 у ChunkedArray такого аргумента нет, а
-    # копия здесь всё равно неизбежна — колонка склеивается из батчей.
-    return {c: table.column(c).to_numpy() for c in COLS}
-
-
-def aggregate(col):
-    """Свёртка ансамбля в одну строку на ячейку и чекпойнт."""
-    # Расстройки, чекпойнты и типы связи — сетка, а не непрерывные величины,
-    # поэтому группировка идёт по их индексам. Это заодно снимает вопрос о
-    # сравнении чисел с плавающей точкой на равенство.
-    axes = {}
-    idx = {}
-    for name in ("coupling_type", "eps", "t_trans", "delta1", "delta2"):
-        axes[name] = np.unique(col[name])
-        idx[name] = np.searchsorted(axes[name], col[name])
-
-    key = idx["coupling_type"]
-    for name in ("eps", "t_trans", "delta1", "delta2"):
-        key = key * len(axes[name]) + idx[name]
-
-    order = np.argsort(key, kind="stable")
-    key_sorted = key[order]
-    starts = np.flatnonzero(np.r_[True, key_sorted[1:] != key_sorted[:-1]])
-    sizes = np.diff(np.r_[starts, len(key_sorted)])
-    n_ens = sizes[0]
-    if not np.all(sizes == n_ens):
-        sys.exit(f"ансамбли разного размера: от {sizes.min()} до {sizes.max()}; "
-                 "свёртка рассчитана на одинаковые")
-
-    # Все группы одного размера, поэтому отсортированный столбец разворачивается
-    # в матрицу (ячейки, начальные условия) и сводится вдоль второй оси разом.
-    def by_cell(name):
-        return col[name][order].reshape(-1, n_ens)
-
-    out = {}
-    keys_at = order[starts]
-    for name in ("coupling_type", "eps", "t_trans", "delta1", "delta2"):
-        out[name] = col[name][keys_at]
-    out["n"] = np.full(len(starts), n_ens, dtype=np.int64)
-
-    # Наклоны бинарник уже пишет по модулю
-    caps = {}
-    for pair in ("01", "02", "12"):
-        caps[pair] = by_cell("s" + pair) < THETA
-        out["cap" + pair] = caps[pair].mean(axis=1)
-    out["cap_any"] = (caps["01"] | caps["02"] | caps["12"]).mean(axis=1)
-
-    for name in ("L", "A", "P"):
-        out[name + "_med"] = np.median(by_cell(name), axis=1)
-    P = by_cell("P")
-    out["P_min"] = P.min(axis=1)
-    out["P_max"] = P.max(axis=1)
-    out["P_spread"] = out["P_max"] - out["P_min"]
-    for pair in ("01", "02", "12"):
-        out["s" + pair + "_med"] = np.median(by_cell("s" + pair), axis=1)
-    return out
+QUERY = """
+COPY (
+  SELECT
+    {keys},
+    count(*) AS n,
+    avg(CASE WHEN s01 < {th} THEN 1.0 ELSE 0.0 END) AS cap01,
+    avg(CASE WHEN s02 < {th} THEN 1.0 ELSE 0.0 END) AS cap02,
+    avg(CASE WHEN s12 < {th} THEN 1.0 ELSE 0.0 END) AS cap12,
+    avg(CASE WHEN least(s01, s02, s12) < {th} THEN 1.0 ELSE 0.0 END) AS cap_any,
+    median(L) AS L_med,
+    median(A) AS A_med,
+    median(P) AS P_med,
+    min(P) AS P_min,
+    max(P) AS P_max,
+    max(P) - min(P) AS P_spread,
+    median(s01) AS s01_med,
+    median(s02) AS s02_med,
+    median(s12) AS s12_med
+  FROM read_csv({src}, comment='#')
+  GROUP BY {keys}
+  ORDER BY {keys}
+) TO '{dst}' (FORMAT CSV, HEADER)
+"""
 
 
 def main():
@@ -130,22 +73,16 @@ def main():
     dst, sources = sys.argv[1], sys.argv[2:]
     print(f"порог захвата theta = {THETA:.4e} (окно {WINDOW:g})", flush=True)
 
-    with open(dst, "w") as out:
-        out.write(",".join(OUT_COLS) + "\n")
-        total = 0
-        for i, src in enumerate(sources, 1):
-            col = read_chunk(src)
-            n_raw = len(col["P"])
-            agg = aggregate(col)
-            del col
-            rows = np.column_stack([agg[c] for c in OUT_COLS])
-            np.savetxt(out, rows, delimiter=",", fmt="%.9g")
-            total += len(rows)
-            print(f"[{i}/{len(sources)}] {os.path.basename(src)}: "
-                  f"{n_raw:,} строк -> {len(rows):,} ячеек", flush=True)
+    con = duckdb.connect()
+    # Временные файлы — рядом с выгрузкой: в корне счётной машины меньше двух
+    # гигабайт, а сортировка под медиану может вылиться на диск.
+    con.execute(f"SET temp_directory='{os.path.dirname(os.path.abspath(dst))}'")
+    src = "[" + ", ".join(f"'{s}'" for s in sources) + "]"
+    con.execute(QUERY.format(keys=KEYS, th=repr(THETA), src=src, dst=dst))
 
+    n = con.execute(f"SELECT count(*) FROM read_csv('{dst}')").fetchone()[0]
     size = os.path.getsize(dst) / 2 ** 20
-    print(f"итого {total:,} строк, {size:.1f} МБ -> {dst}")
+    print(f"итого {n:,} строк, {size:.1f} МБ -> {dst}")
 
 
 if __name__ == "__main__":
