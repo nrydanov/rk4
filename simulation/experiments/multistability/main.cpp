@@ -6,6 +6,7 @@
 #include "provenance.hpp"
 #include "vdp_ensemble.hpp"
 #include <CLI11.hpp>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -32,11 +33,16 @@ template <int N> struct Config {
   // читаются по дороге: прогон с меньшим t_trans — это та же самая траектория,
   // просто окно взято раньше. Отдельные запуски дали бы те же числа втридорога.
   std::vector<double> t_trans_list;
-  // Длина окна наблюдения, общая для всех чекпойнтов. Фиксирована намеренно:
-  // от неё зависит порог theta = 2*pi/window и шумовой пол оценки наклонов,
-  // поэтому менять её вместе с t_trans значит менять две вещи разом и потерять
-  // возможность судить о сходимости по транзиенту.
-  double window;
+  // Длины окон наблюдения, по возрастанию. Окна вложены: все начинаются в
+  // чекпойнте и различаются только моментом закрытия, поэтому снимаются с
+  // одного накопителя — короткое окно есть префикс длинного.
+  //
+  // Ось окна отвечает за другое, нежели ось транзиента. Транзиент убирает
+  // недосошедшиеся траектории; окно задаёт порог theta = 2*pi/window и
+  // разрешение оценки наклона, то есть ширину полосы, в которой «захвачено» от
+  // «не захвачено» вообще не отличить. Одно другим не лечится, поэтому мерить
+  // их надо по отдельности.
+  std::vector<double> windows;
   // Значения силы связи задаются отдельно для инерционных и диссипативных
   // вариантов: у диссипативной связи полуширина языка захвата примерно равна
   // eps, у инерционной вчетверо меньше, а порог гашения (mu - eps*k_n = 0)
@@ -54,6 +60,7 @@ struct Result {
   double delta1, delta2, eps; // параметры системы
   int coupling_type; // тип связи
   double t_trans;    // чекпойнт, с которого началось окно наблюдения
+  double t_obs;      // длина окна, по которому посчитаны метрики
   double x0, y0, x1, y1, x2, y2;       // начальные условия
   double xf0, yf0, xf1, yf1, xf2, yf2; // конечное состояние
   double L, A, P; // значения рассматриваемых целевых функций
@@ -83,7 +90,7 @@ void print_progress(size_t done, size_t total,
 
 void write_result(std::ostream &out, const Result &r) {
   out << r.delta1 << "," << r.delta2 << "," << r.eps << "," << r.coupling_type
-      << "," << r.t_trans
+      << "," << r.t_trans << "," << r.t_obs
       << "," << r.x0 << "," << r.y0 << "," << r.x1 << "," << r.y1 << "," << r.x2
       << "," << r.y2 << "," << r.xf0 << "," << r.yf0 << "," << r.xf1 << ","
       << r.yf1 << "," << r.xf2 << "," << r.yf2 << "," << r.L << "," << r.A
@@ -99,17 +106,22 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
   const size_t n_tasks =
       (size_t)cfg.grid_size * cfg.grid_size * epsilons.size() * cfg.n_ic;
   const int n_cp = (int)cfg.t_trans_list.size();
-  const long n_win = std::lround(cfg.window / cfg.dt);
-  // Окно чекпойнта c — это выборки с номерами (cp_start[c], cp_start[c]+n_win].
+  const int n_w = (int)cfg.windows.size();
+  // Длины окон по возрастанию; последняя определяет, когда накопитель закрыт
+  std::vector<long> win_len(n_w);
+  for (int j = 0; j < n_w; ++j)
+    win_len[j] = std::lround(cfg.windows[j] / cfg.dt);
+  const long max_win = win_len.back();
+  // Окно чекпойнта c — это выборки с номерами (cp_start[c], cp_start[c]+len].
   // Нумерация с единицы, потому что метрика снимается после шага, а не до него.
   std::vector<long> cp_start(n_cp);
   long n_steps = 0, first_open = std::numeric_limits<long>::max();
   for (int c = 0; c < n_cp; ++c) {
     cp_start[c] = std::lround(cfg.t_trans_list[c] / cfg.dt);
-    n_steps = std::max(n_steps, cp_start[c] + n_win);
+    n_steps = std::max(n_steps, cp_start[c] + max_win);
     first_open = std::min(first_open, cp_start[c]);
   }
-  std::vector<Result> results(n_tasks * n_cp);
+  std::vector<Result> results(n_tasks * n_cp * n_w);
   // Счетчик текущего прогресса
   std::atomic<size_t> progress{0};
   // Чтобы снизить падение производительности из-за постоянного вывода состояния,
@@ -152,7 +164,6 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
         thread_local std::vector<phase_diff_slopes<double>> pds;
         thread_local std::optional<phase_t<double, int>> phase_goal;
         thread_local std::vector<double> L_acc, A_acc, P_acc;
-        thread_local std::vector<std::array<double, 2 * N>> yf_cp;
         ampl_t<double, int> ampl_goal(2, N);
         if ((int)pds.size() != n_cp) {
           pds.clear();
@@ -162,7 +173,6 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
           L_acc.resize(n_cp);
           A_acc.resize(n_cp);
           P_acc.resize(n_cp);
-          yf_cp.resize(n_cp);
         }
 
         std::array<double, 2 * N> y0;
@@ -204,43 +214,47 @@ void sweep(int coupling_type_id, const std::string &label, const Config<N> &cfg,
             const double A_k = ampl_goal(state.data());
             const double P_k = phase_goal->from_raw_phases(raw_phase.data());
             for (int c = 0; c < n_cp; ++c) {
-              if (k <= cp_start[c] || k > cp_start[c] + n_win)
+              if (k <= cp_start[c] || k > cp_start[c] + max_win)
                 continue;
               pds[c].push_raw(t, raw_phase.data());
               L_acc[c] += L_k;
               A_acc[c] += A_k;
               P_acc[c] += P_k;
-              // Конечное состояние — то, на котором окно закрылось
-              if (k == cp_start[c] + n_win)
-                yf_cp[c] = state;
+              // Окна вложены и начинаются в одной точке, поэтому короткое —
+              // это префикс длинного: результат снимается прямо по ходу, без
+              // отдельного накопителя на каждое окно. Чтение накопителя не
+              // разрушающее, накопление после него продолжается.
+              for (int j = 0; j < n_w; ++j) {
+                if (k != cp_start[c] + win_len[j])
+                  continue;
+                const auto &yf = state;
+                results[((base + ic) * n_cp + c) * n_w + j] = {
+                    delta1,
+                    delta2,
+                    epsilons[e],
+                    coupling_type_id,
+                    cfg.t_trans_list[c],
+                    cfg.windows[j],
+                    y0[0],
+                    y0[1],
+                    y0[2],
+                    y0[3],
+                    y0[4],
+                    y0[5],
+                    yf[0],
+                    yf[1],
+                    yf[2],
+                    yf[3],
+                    yf[4],
+                    yf[5],
+                    2.0 * L_acc[c] / win_len[j],
+                    A_acc[c] / win_len[j],
+                    P_acc[c] / win_len[j],
+                    pds[c](0, 1),
+                    pds[c](0, 2),
+                    pds[c](1, 2)};
+              }
             }
-          }
-
-          for (int c = 0; c < n_cp; ++c) {
-            const auto &yf = yf_cp[c];
-            results[(base + ic) * n_cp + c] = {delta1,
-                              delta2,
-                              epsilons[e],
-                              coupling_type_id,
-                              cfg.t_trans_list[c],
-                              y0[0],
-                              y0[1],
-                              y0[2],
-                              y0[3],
-                              y0[4],
-                              y0[5],
-                              yf[0],
-                              yf[1],
-                              yf[2],
-                              yf[3],
-                              yf[4],
-                              yf[5],
-                              2.0 * L_acc[c] / n_win,
-                              A_acc[c] / n_win,
-                              P_acc[c] / n_win,
-                              pds[c](0, 1),
-                              pds[c](0, 2),
-                              pds[c](1, 2)};
           }
 
           size_t done = progress.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -269,16 +283,21 @@ int run(const YAML::Node &yaml, const std::string &config_path,
   // наблюдения; при их отсутствии работает прежняя пара t_transition и T, то
   // есть один чекпойнт — так продолжают считаться старые конфиги.
   std::vector<double> t_trans_list;
-  double window;
+  std::vector<double> windows;
   if (s["t_trans_list"]) {
     t_trans_list = s["t_trans_list"].as<std::vector<double>>();
-    window = s["window"].as<double>();
+    // windows задаёт лестницу окон, window — одно окно; второе оставлено ради
+    // прежних конфигов лестницы транзиента
+    windows = s["windows"] ? s["windows"].as<std::vector<double>>()
+                           : std::vector<double>{s["window"].as<double>()};
   } else {
     t_trans_list = {s["t_transition"].as<double>()};
-    window = s["T"].as<double>() - t_trans_list[0];
+    windows = {s["T"].as<double>() - t_trans_list[0]};
   }
-  if (window <= 0.0) {
-    std::cerr << "Observation window must be positive (got " << window << ")\n";
+  // Окна снимаются с одного накопителя по ходу, поэтому порядок обязателен
+  std::sort(windows.begin(), windows.end());
+  if (windows.empty() || windows.front() <= 0.0) {
+    std::cerr << "Observation windows must be positive\n";
     return 1;
   }
 
@@ -289,7 +308,7 @@ int run(const YAML::Node &yaml, const std::string &config_path,
       .d_min = d_min,
       .d_step = d_step,
       .t_trans_list = t_trans_list,
-      .window = window,
+      .windows = windows,
       // Ключ epsilons задаёт общий список для всех типов связи (так устроены
       // прежние конфиги); epsilons_inertial и epsilons_dissipative задают их
       // раздельно и имеют приоритет.
@@ -310,7 +329,10 @@ int run(const YAML::Node &yaml, const std::string &config_path,
             << cfg.eps_dissipative.size() << " diss"
             << "  n_ic: " << cfg.n_ic
             << "  OpenMP threads: " << omp_get_max_threads() << "\n";
-  std::cerr << "Window: " << cfg.window << "  checkpoints t_trans:";
+  std::cerr << "Windows:";
+  for (double w : cfg.windows)
+    std::cerr << " " << w;
+  std::cerr << "   checkpoints t_trans:";
   for (double t : cfg.t_trans_list)
     std::cerr << " " << t;
   std::cerr << "\n";
@@ -327,7 +349,7 @@ int run(const YAML::Node &yaml, const std::string &config_path,
   // начальные условия воспроизводятся из seed. При этом 17 цифр сжимаются вдвое
   // хуже: 140 Б на строку против 76, а выгрузка идёт сотнями миллионов строк.
   out << std::setprecision(9);
-  out << "delta1,delta2,eps,coupling_type,t_trans,x0,y0,x1,y1,x2,y2,"
+  out << "delta1,delta2,eps,coupling_type,t_trans,t_obs,x0,y0,x1,y1,x2,y2,"
          "xf0,yf0,xf1,yf1,xf2,yf2,L,A,P,s01,s02,s12\n";
 
   auto sink = [&out](const Result &r) { write_result(out, r); };
