@@ -59,9 +59,29 @@ QUERY = """
     median(s01) AS s01_med,
     median(s02) AS s02_med,
     median(s12) AS s12_med
-  FROM read_csv('{src}', comment='#')
+  FROM {src}
+  {where}
   GROUP BY {keys}
 """
+
+
+def sources_of(path):
+    """Куски, на которые бьётся свёртка, и выражение источника для DuckDB.
+
+    Медиана требует держать ансамбль ячейки целиком, поэтому вся выгрузка одним
+    запросом не считается — она бьётся на части. У csv.zst часть это файл (в
+    каждом свой eps), у parquet — пара (тип связи, eps): границы групп её не
+    пересекают, так что результат от разбиения не зависит.
+    """
+    if path.endswith(".parquet"):
+        con = duckdb.connect()
+        pairs = con.execute(
+            f"SELECT DISTINCT coupling_type, eps FROM read_parquet('{path}') "
+            "ORDER BY coupling_type, eps").fetchall()
+        return [(f"read_parquet('{path}')",
+                 f"WHERE coupling_type = {ct} AND eps = {eps!r}",
+                 f"тип {ct}, eps {eps:g}") for ct, eps in pairs]
+    return [(f"read_csv('{path}', comment='#')", "", os.path.basename(path))]
 
 
 def main():
@@ -75,19 +95,15 @@ def main():
     # гигабайт, а сортировка под медиану может вылиться на диск.
     con.execute(f"SET temp_directory='{os.path.dirname(os.path.abspath(dst))}'")
 
-    # По одному куску за раз, а не одним запросом по всей выгрузке: медиана
-    # требует держать ансамбль целиком, и на 328 млн строк запрос молча
-    # умирал. Группы не пересекают файлы — в каждом куске свой eps, — поэтому
-    # результат от разбиения не меняется.
-    for i, src in enumerate(sources, 1):
-        select = QUERY.format(keys=KEYS, th=repr(THETA), src=src)
+    parts = [p for s in sources for p in sources_of(s)]
+    for i, (src, where, label) in enumerate(parts, 1):
+        select = QUERY.format(keys=KEYS, th=repr(THETA), src=src, where=where)
         # Таблица создаётся по первому же запросу, чтобы типы колонок брались
         # из него, а не назначались вручную
         con.execute(f"CREATE TABLE agg AS {select}" if i == 1
                     else f"INSERT INTO agg {select}")
         done = con.execute("SELECT count(*) FROM agg").fetchone()[0]
-        print(f"[{i}/{len(sources)}] {os.path.basename(src)}: "
-              f"всего {done:,} ячеек", flush=True)
+        print(f"[{i}/{len(parts)}] {label}: всего {done:,} ячеек", flush=True)
 
     con.execute(f"COPY (SELECT * FROM agg ORDER BY {KEYS}) "
                 f"TO '{dst}' (FORMAT CSV, HEADER)")
